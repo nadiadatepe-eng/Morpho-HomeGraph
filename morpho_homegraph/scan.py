@@ -21,6 +21,7 @@ import os
 import time
 from pathlib import Path
 
+from . import journal
 from .store import L0
 
 
@@ -90,7 +91,8 @@ def walk(root: str | Path):
                     pending.append(entry.path)
 
 
-def scan(store, root: str | Path) -> dict[str, int | float]:
+def scan(store, root: str | Path,
+         scope: list[str] | None = None) -> dict:
     """Walk `root` into the store's `files` table. Returns a summary.
 
     The whole walk is one transaction. A half-written L0 is worse than none:
@@ -122,11 +124,19 @@ def scan(store, root: str | Path) -> dict[str, int | float]:
             yield row
 
     with store.writing() as db:
-        db.execute("DELETE FROM files")
+        # Into a staging table first, so the previous pass is still there when
+        # L1 diffs against it. Replacing `files` in place would destroy the
+        # only thing the journal has to compare with.
+        db.execute("DROP TABLE IF EXISTS files_new")
+        db.execute("CREATE TABLE files_new AS SELECT * FROM files WHERE 0")
         db.executemany(
-            "INSERT OR REPLACE INTO files "
+            "INSERT OR REPLACE INTO files_new "
             "(path, kind, size, mtime_ns, inode, dev) VALUES (?, ?, ?, ?, ?, ?)",
             rows())
+        tally = journal.build(store, scope or [])
+        db.execute("DELETE FROM files")
+        db.execute("INSERT INTO files SELECT * FROM files_new")
+        db.execute("DROP TABLE files_new")
         db.commit()
     elapsed = time.perf_counter() - started
     store.set_meta("l0_root", str(Path(root).expanduser()))
@@ -134,5 +144,6 @@ def scan(store, root: str | Path) -> dict[str, int | float]:
     store.set_meta("l0_count", str(counted["kept"]))
     store.set_meta("l0_seconds", "%.3f" % elapsed)
     store.set_meta("l0_unreadable", str(counted["unreadable"]))
+    store.set_meta("l1_tally", repr(tally))
     return {"count": counted["kept"], "seconds": elapsed,
-            "unreadable": counted["unreadable"]}
+            "unreadable": counted["unreadable"], "journal": tally}

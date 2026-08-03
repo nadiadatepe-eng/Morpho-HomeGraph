@@ -30,7 +30,7 @@ from pathlib import Path
 
 from .lock import Unguarded, holds
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Two roles, two schemas, and the split is the point. **L0 is shared**: it
 # describes the whole home area, it is identical for every project, and it
@@ -68,7 +68,21 @@ SCHEMA = {
               "  size INTEGER NOT NULL,"
               "  mtime_ns INTEGER NOT NULL,"
               "  inode INTEGER NOT NULL,"
-              "  dev INTEGER NOT NULL)"),
+              "  dev INTEGER NOT NULL,"
+              # CP-2 (L1). NULL means "never hashed", which happens for
+              # anything outside the chosen scope -- and it is the one value
+              # that must never be read as "unchanged". homegraph stored
+              # nothing here at all, so its stored hash was NULL for every
+              # row, every rewrite came back as `changed`, and the two-step
+              # design was decoration from the day it was written.
+              "  content_hash TEXT)"),
+    # L1 (CP-2): what changed between this L0 pass and the previous one.
+    # Replaced whole on every scan, like `files` -- a journal that accumulates
+    # is one where "the previous pass" has stopped meaning anything.
+    "journal": (L0,
+                "CREATE TABLE IF NOT EXISTS journal ("
+                "  path TEXT PRIMARY KEY,"
+                "  state TEXT NOT NULL)"),
 }
 
 # Milliseconds a reader or writer waits on a locked SQLite page before giving

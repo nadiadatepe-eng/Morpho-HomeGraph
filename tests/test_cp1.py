@@ -427,8 +427,13 @@ def gates_shared_l0(tree):
         with Store(l0_path(), role=L0) as store:
             tables = {r[0] for r in store.db.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")}
+            # Grows one entry per checkpoint that adds a shared table --
+            # `journal` arrived with CP-2 and this gate said so, which is what
+            # an equality is for. A subset check would have let a table nobody
+            # declared in through the same door.
             check("18 the shared L0 store is the one that has L0",
-                  tables == {"meta", "files"}, "tables=%s" % sorted(tables))
+                  tables == {"meta", "files", "journal"},
+                  "tables=%s" % sorted(tables))
     finally:
         l0_guard.release()
 
