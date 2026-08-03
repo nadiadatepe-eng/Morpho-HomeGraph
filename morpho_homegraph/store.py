@@ -30,7 +30,7 @@ from pathlib import Path
 
 from .lock import Unguarded, holds
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Milliseconds a reader or writer waits on a locked SQLite page before giving
 # up. This is the *page* lock, not the write barrier -- WAL keeps readers off
@@ -174,6 +174,25 @@ class Store:
                 "CREATE TABLE IF NOT EXISTS meta ("
                 "  key TEXT PRIMARY KEY,"
                 "  value TEXT NOT NULL)")
+            # L0 (CP-1). The path is the key here, and that is not the rule
+            # CP-6 forbids: *a project's* path must never key an id, so that
+            # nobody can treat a path as an identity without meeting the
+            # ambiguity CP-6 decides. L0 is a path index by definition -- it
+            # answers "what does the filesystem look like", and nothing else
+            # would serve as its key.
+            #
+            # mtime in nanoseconds as an integer: `st_mtime` is a float and
+            # loses precision on large timestamps, and CP-2 has to tell
+            # "same size, different mtime" from "same both" for real rather
+            # than by rounding introduced here.
+            self.db.execute(
+                "CREATE TABLE IF NOT EXISTS files ("
+                "  path TEXT PRIMARY KEY,"
+                "  kind TEXT NOT NULL,"
+                "  size INTEGER NOT NULL,"
+                "  mtime_ns INTEGER NOT NULL,"
+                "  inode INTEGER NOT NULL,"
+                "  dev INTEGER NOT NULL)")
             self.db.commit()
         current = int(self.get_meta("schema_version") or 0)
         if current < SCHEMA_VERSION:

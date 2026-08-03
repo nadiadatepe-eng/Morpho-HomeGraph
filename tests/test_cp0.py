@@ -190,8 +190,11 @@ def gates_store(tree):
               first == str(SCHEMA_VERSION), "schema_version=%s" % first)
         tables = {r[0] for r in store.db.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
-        check("1b the schema is the one CP-0 declares",
-              tables == {"meta"}, "tables=%s" % sorted(tables))
+        # Grows one entry per checkpoint that adds a table, on purpose: an
+        # equality here is what makes a table nobody declared show up as a
+        # failure rather than as nothing.
+        check("1b the schema is the one the checkpoints declare",
+              tables == {"meta", "files"}, "tables=%s" % sorted(tables))
 
     guard = take(db, "2  migrating twice changes nothing")
     if guard is None:
@@ -266,12 +269,23 @@ def gates_identity(tree):
     #
     # Searching for the literal `project_path` was not enough -- a
     # `registry(path PRIMARY KEY, id)` table passes that and is exactly the
-    # reverse index this rule forbids (codex, 2026-08-03). Any DDL naming a
-    # path at all is the thing to refuse.
-    paths_in_ddl = [row[0] for row in keyed if "path" in (row[0] or "").lower()]
-    check("7b nothing is keyed by a path",
-          not paths_in_ddl,
-          "%d schema objects, %d naming a path" % (len(keyed), len(paths_in_ddl)))
+    # reverse index this rule forbids (codex, 2026-08-03).
+    #
+    # Narrowed 2026-08-03, argued in `tests/gold/FASIT-cp1.md`: "no DDL names
+    # a path at all" was too broad and went red on correct code the moment
+    # CP-1 added `files(path PRIMARY KEY)`. L0 *is* a path index -- nothing
+    # else would serve as its key. The rule being guarded is CP-6's, and it is
+    # about *a project's* path: `project_path` lives as a value in `meta` and
+    # must never be a key or a unique column anywhere.
+    keyed_by_project_path = [
+        row[0] for row in keyed
+        if "project_path" in (row[0] or "")
+        and any(word in (row[0] or "").upper()
+                for word in ("PRIMARY KEY", "UNIQUE", "CREATE INDEX"))]
+    check("7b no project's path is a key",
+          not keyed_by_project_path,
+          "%d schema objects, %d keyed by a project path"
+          % (len(keyed), len(keyed_by_project_path)))
 
 
 # -- 7c-7e. an argument is an id or a path, and never both -----------------

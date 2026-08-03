@@ -247,6 +247,17 @@ MUTATIONS = [
      '    project_id = "deadbeefdeadbeef"  # mutated: not generated',
      "5  two adds of one path give two ids"),
 
+    ("a project's path becomes a key",
+     "morpho_homegraph/store.py",
+     '                "  key TEXT PRIMARY KEY,"\n'
+     '                "  value TEXT NOT NULL)")',
+     '                "  key TEXT PRIMARY KEY,"\n'
+     '                "  value TEXT NOT NULL)")\n'
+     '            self.db.execute(  # mutated: the reverse index CP-6 forbids\n'
+     '                "CREATE TABLE IF NOT EXISTS registry ("\n'
+     '                "  project_path TEXT PRIMARY KEY, id TEXT NOT NULL)")',
+     "7b no project's path is a key"),
+
     ("the schema version is never written",
      "morpho_homegraph/store.py",
      "        if current < SCHEMA_VERSION:\n"

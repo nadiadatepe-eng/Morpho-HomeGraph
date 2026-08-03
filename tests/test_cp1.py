@@ -1,0 +1,386 @@
+#!/usr/bin/env python3
+"""CP-1 -- L0, the catalogue over the whole home area.
+
+The answer key is `tests/gold/FASIT-cp1.md`, written before this file and
+before the code it grades. Gate numbers below are that document's.
+
+The load-bearing claim is "this layer never opens a file", and it is checked
+by **two detectors that fail differently**: `sys.addaudithook` sees what
+Python does and is blind to a C extension that opens without raising an audit
+event; `strace` sees every syscall and is blind to which of them was ours.
+Neither is the proof alone, and each has a negative control -- a run that
+deliberately reads must be caught, and the strace invocation must be shown to
+see anything at all. Without those two, "no openat" is equally satisfied by a
+walk that visited nothing and a filter that matches nothing.
+
+Run:
+    python3 tests/test_cp1.py
+"""
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from report import reporter  # noqa: E402
+
+from morpho_homegraph.lock import StoreLock, Unguarded  # noqa: E402
+from morpho_homegraph.scan import scan, walk  # noqa: E402
+from morpho_homegraph.store import Store, db_path, new_project  # noqa: E402
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+results, check = reporter(56)
+
+# A second interpreter that walks a tree with the production code and reports
+# nothing but the count. Run under strace, its syscalls are the measurement.
+WALKER = """
+import sys
+sys.path.insert(0, %r)
+from morpho_homegraph.scan import walk
+print(sum(1 for _ in walk(sys.argv[1])), flush=True)
+"""
+
+# The same, except it reads one file. The negative control: if strace cannot
+# see this, it cannot see anything, and gate 4 proves nothing.
+READER = """
+import sys
+sys.path.insert(0, %r)
+from morpho_homegraph.scan import walk
+rows = list(walk(sys.argv[1]))
+for path, kind, *_ in rows:
+    if kind == "file":
+        open(path, "rb").read(16)
+        break
+print(len(rows), flush=True)
+"""
+
+
+def build_tree(root):
+    """A fixture that does not change while `find` and the walk both look at it.
+
+    Counting against a live home area is a weak gate: files appear and vanish
+    between the two passes. Everything the rules talk about is planted here
+    instead -- a symlink, a cycle, a directory with no read permission.
+    """
+    os.makedirs(os.path.join(root, "src", "deep"), exist_ok=True)
+    os.makedirs(os.path.join(root, "empty"), exist_ok=True)
+    for name, body in (("a.py", "x = 1\n"), ("b.md", "# title\n" * 40),
+                       ("src/c.py", "def f():\n    return 2\n"),
+                       ("src/deep/d.txt", "deep\n")):
+        with open(os.path.join(root, name), "w", encoding="utf-8") as fh:
+            fh.write(body)
+    os.symlink(os.path.join(root, "a.py"), os.path.join(root, "link-to-a"))
+    # A cycle. A walk that follows symlinks does not terminate here, and one
+    # that dedupes by path rather than by (dev, inode) counts the tree twice.
+    os.symlink("..", os.path.join(root, "src", "up"))
+    closed = os.path.join(root, "closed")
+    os.makedirs(closed, exist_ok=True)
+    with open(os.path.join(closed, "secret.txt"), "w") as fh:
+        fh.write("hidden\n")
+    os.chmod(closed, 0o000)
+    return closed
+
+
+def find_count(root):
+    """`find` over the same tree: everything except the root itself."""
+    proc = subprocess.run(["find", root, "-mindepth", "1"],
+                          capture_output=True, text=True, timeout=120)
+    return [line for line in proc.stdout.splitlines() if line]
+
+
+# -- 1-2, 7-11, 13. the walk itself ----------------------------------------
+
+def gates_walk(tree, closed):
+    # An unreadable directory is the one condition in this fixture that can
+    # end the walk rather than appear in it, so it is caught here: a walk that
+    # raises is gate 9 failing, not the harness dying. A crash names no gate.
+    try:
+        rows = list(walk(tree))
+    except OSError as exc:
+        check("9  an unreadable directory is reported, not fatal", False,
+              "the walk raised: %r" % exc)
+        for gate in ("1  the row count matches find on the same tree",
+                     "2  every row carries all six fields",
+                     "7  a symlink is its own row with its own inode",
+                     "8  a symlink cycle terminates and doubles nothing",
+                     "11 two walks of an untouched tree give the same set",
+                     "13 mtime is an integer count of nanoseconds"):
+            check(gate, False, "not reached")
+        return
+    kept = [r for r in rows if r[1] != "unreadable"]
+    paths = {r[0] for r in kept}
+
+    # `find` cannot enter the unreadable directory either, so both sides see
+    # the directory and not its contents. That is the comparison being made.
+    expected = set(find_count(tree))
+    check("1  the row count matches find on the same tree",
+          paths == expected and paths,
+          "walk %d, find %d, differing %d"
+          % (len(paths), len(expected), len(paths ^ expected)))
+
+    check("2  every row carries all six fields",
+          all(r[0] and r[1] and r[3] > 0 and r[4] > 0 and r[5] > 0
+              for r in kept),
+          "%d rows" % len(kept))
+
+    link = [r for r in kept if r[0].endswith("link-to-a")]
+    target = [r for r in kept if r[0].endswith("/a.py")]
+    check("7  a symlink is its own row with its own inode",
+          len(link) == 1 and len(target) == 1
+          and link[0][1] == "link" and link[0][4] != target[0][4],
+          "link inode %s, target inode %s"
+          % (link[0][4] if link else "-", target[0][4] if target else "-"))
+
+    # If the cycle were followed, this walk would not have returned at all --
+    # so reaching this line is half the gate. The other half is that nothing
+    # was counted twice on the way.
+    check("8  a symlink cycle terminates and doubles nothing",
+          len(paths) == len(kept),
+          "%d rows, %d distinct paths" % (len(kept), len(paths)))
+
+    unreadable = [r[0][1:] for r in rows if r[1] == "unreadable"]
+    check("9  an unreadable directory is reported, not fatal",
+          unreadable == [closed] and closed in paths,
+          "unreadable=%s" % unreadable)
+
+    again = {r[0] for r in walk(tree) if r[1] != "unreadable"}
+    check("11 two walks of an untouched tree give the same set",
+          again == paths, "%d symmetric difference" % len(again ^ paths))
+
+    mtimes = [r[3] for r in kept]
+    check("13 mtime is an integer count of nanoseconds",
+          all(isinstance(m, int) for m in mtimes) and max(mtimes) > 10 ** 17,
+          "max=%s" % max(mtimes))
+
+
+def gates_vanishing(work):
+    """R6 -- a file removed between listing and stat is skipped, not fatal.
+
+    Planted rather than raced: `scandir` is made to return an entry whose file
+    is already gone. Waiting for the real race to happen would be a gate that
+    passes because it never fired.
+    """
+    tree = os.path.join(work, "vanishing")
+    os.makedirs(tree, exist_ok=True)
+    for n in range(5):
+        with open(os.path.join(tree, "f%d" % n), "w") as fh:
+            fh.write("x")
+
+    import morpho_homegraph.scan as scanmod
+    real_scandir = os.scandir
+
+    class Ghost:
+        """An entry whose file disappeared after the listing was taken."""
+        path = os.path.join(tree, "gone")
+        def stat(self, follow_symlinks=True):
+            raise FileNotFoundError(2, "No such file or directory", self.path)
+        def is_symlink(self): return False
+        def is_dir(self, follow_symlinks=True): return False
+        def is_file(self, follow_symlinks=True): return True
+
+    class Listing:
+        def __init__(self, it): self.it = it
+        def __enter__(self): return list(self.it) + [Ghost()]
+        def __exit__(self, *exc): return False
+
+    scanmod.os.scandir = lambda path: Listing(real_scandir(path))
+    try:
+        rows = list(walk(tree))
+        survived = True
+    except OSError:
+        rows = []
+        survived = False
+    finally:
+        scanmod.os.scandir = real_scandir
+    check("10 a file that vanishes mid-walk is skipped, not fatal",
+          survived and len(rows) == 5,
+          "%d rows, walk %s" % (len(rows), "returned" if survived else "RAISED"))
+
+
+# -- 3, 5. the audit hook: what Python did ---------------------------------
+
+def gates_audit_hook(tree):
+    """R2, first detector. Blind to anything that opens without an audit event."""
+    opened = []
+    corpus = os.path.abspath(tree)
+
+    def spy(event, args):
+        if event == "open" and args and isinstance(args[0], str):
+            if os.path.abspath(args[0]).startswith(corpus):
+                opened.append(args[0])
+
+    sys.addaudithook(spy)
+    rows = list(walk(tree))
+    files_opened = [p for p in opened
+                    if not os.path.isdir(p)]
+    check("3  the audit hook sees no file opened during a walk",
+          not files_opened and len(rows) > 5,
+          "%d rows, %d files opened" % (len(rows), len(files_opened)))
+
+    # R3: the same hook, with a read deliberately performed. A detector that
+    # cannot see a read it was pointed at is not a detector.
+    target = next(r[0] for r in rows if r[1] == "file")
+    with open(target, "rb") as fh:
+        fh.read(16)
+    check("5  the audit hook sees a read when there is one",
+          any(os.path.abspath(p) == os.path.abspath(target) for p in opened),
+          "%d opens recorded" % len(opened))
+
+
+# -- 4, 6. strace: what the kernel was asked ------------------------------
+
+def straced(script, tree):
+    """(openat paths, whether strace ran). `None` when strace is unavailable."""
+    if shutil.which("strace") is None:
+        return None, False
+    with tempfile.NamedTemporaryFile(suffix=".strace", delete=False) as tmp:
+        log = tmp.name
+    try:
+        proc = subprocess.run(
+            ["strace", "-f", "-e", "trace=openat", "-o", log,
+             sys.executable, "-c", script % REPO, tree],
+            capture_output=True, text=True, timeout=300)
+        if proc.returncode != 0:
+            return None, False
+        with open(log, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    finally:
+        os.unlink(log)
+    # Only successful opens of paths inside the fixture. A failed openat is
+    # the kernel refusing, not us reading.
+    found = []
+    for m in re.finditer(r'openat\([^,]+, "([^"]+)"[^)]*\)\s*=\s*(-?\d+)', text):
+        path, rc = m.group(1), int(m.group(2))
+        if rc >= 0 and os.path.abspath(path).startswith(os.path.abspath(tree)):
+            found.append(path)
+    return found, True
+
+
+def gates_strace(tree):
+    opened, ran = straced(WALKER, tree)
+    if not ran:
+        # Not green and not silently skipped: a check that reports success
+        # when it measured nothing is the empty gate this project is named
+        # after.
+        check("4  strace sees no file opened during a walk", False,
+              "strace unavailable -- NOT RUN, not passed")
+        check("6  strace can see an open at all", False,
+              "strace unavailable -- NOT RUN, not passed")
+        return
+    files = [p for p in opened if not os.path.isdir(p)]
+    check("4  strace sees no file opened during a walk",
+          not files, "%d directory opens, %d file opens"
+          % (len(opened) - len(files), len(files)))
+
+    # R3 and the control for the measurement itself: the same command around
+    # a walk that reads one file must see it. If it does not, gate 4 was
+    # measuring an strace invocation that sees nothing.
+    read_opens, ran = straced(READER, tree)
+    read_files = [p for p in (read_opens or []) if not os.path.isdir(p)]
+    check("6  strace can see an open at all",
+          ran and len(read_files) >= 1,
+          "%d file opens when the walk reads one" % len(read_files))
+
+
+# -- 12. the scan is a write, and writes are guarded -----------------------
+
+def gates_store(tree):
+    project_id, store_db = new_project()
+    guard = StoreLock(str(store_db)).acquire()
+    try:
+        with Store(store_db) as store:
+            summary = scan(store, tree)
+            rows = store.db.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+            check("14 the scan records its count and its time",
+                  rows == summary["count"] > 5
+                  and float(store.get_meta("l0_seconds")) > 0,
+                  "%d rows in %s s" % (rows, store.get_meta("l0_seconds")))
+    finally:
+        guard.release()
+
+    # CP-0 R8 reaches here too: L0 is the first thing that writes a lot, and
+    # it must not be the first thing that writes unguarded.
+    #
+    # The store is opened *while the guard is held* and the guard dropped
+    # afterwards, so what is under test is the scan's write and not `Store`'s
+    # open-time check. Opening unguarded is refused by CP-0 gate 21 already,
+    # and a version of this gate that leaned on it stayed green with the
+    # scan writing straight to the connection -- found by the sweep, 08-03.
+    # Its own project, so the table starts empty and "was anything written"
+    # is answerable. On the shared one it was not: the scan wrote its rows
+    # unguarded and only died later, on `set_meta`, and the gate read that as
+    # a refusal. Raising is not the property -- writing nothing is.
+    _, fresh_db = new_project()
+    outlived = StoreLock(str(fresh_db)).acquire()
+    fresh = Store(fresh_db)
+    outlived.release()
+    try:
+        scan(fresh, tree)
+        refused = False
+    except Unguarded:
+        refused = True
+    written = fresh.db.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+    fresh.close()
+    check("12 a scan without the write guard writes nothing",
+          refused and written == 0,
+          "%s, %d rows written" % ("refused" if refused else "ALLOWED", written))
+
+    # R8: the layer is refreshed, not appended to. Nothing above sees this --
+    # gate 11 compares two walks in memory, and a store that accumulates rows
+    # across scans passes every one of them while reporting files that were
+    # deleted a week ago.
+    victim = os.path.join(tree, "b.md")
+    guard = StoreLock(str(store_db)).acquire()
+    try:
+        with Store(store_db) as store:
+            before = scan(store, tree)["count"]
+            os.remove(victim)
+            after = scan(store, tree)["count"]
+            rows = store.db.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+            stale = store.db.execute(
+                "SELECT COUNT(*) FROM files WHERE path = ?", (victim,)
+            ).fetchone()[0]
+    finally:
+        guard.release()
+    check("15 a rescan replaces the layer, it does not accumulate",
+          after == before - 1 and rows == after and stale == 0,
+          "%d -> %d rows, %d stale" % (before, after, stale))
+    return db_path(project_id)
+
+
+def main():
+    with tempfile.TemporaryDirectory(prefix="mhg-cp1-") as work:
+        os.environ["MORPHO_HOMEGRAPH_HOME"] = os.path.join(work, "store")
+        tree = os.path.join(work, "tree")
+        os.makedirs(tree)
+        closed = build_tree(tree)
+        try:
+            gates_walk(tree, closed)
+            gates_vanishing(work)
+            gates_audit_hook(tree)
+            gates_strace(tree)
+            gates_store(tree)
+        finally:
+            # Without this the temporary directory cannot be removed, and the
+            # harness leaves a 0o000 directory behind on every run.
+            os.chmod(closed, 0o755)
+
+    failed = [n for n, ok, _ in results if not ok]
+    print("\n%d/%d checks passed" % (len(results) - len(failed), len(results)))
+    return 1 if failed else 0
+
+
+# -- pytest adapter (one test per checkpoint) ------------------------------
+
+def test_checkpoint_cp1():
+    assert main() == 0, "see the printed report above for which check failed"
+
+
+if __name__ == "__main__":
+    sys.exit(main())
