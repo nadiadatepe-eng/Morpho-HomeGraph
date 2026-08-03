@@ -123,6 +123,35 @@ MUTATIONS = [
      "        pass  # mutated: rows accumulate across scans",
      "15 a rescan replaces the layer, it does not accumulate"),
 
+    # -- L0 is shared, and shared has to be enforced ----------------------
+    #
+    # Decided 2026-08-03 after M-1 measured L0 at 204.8 MB. Every one of these
+    # leaves a working product that quietly stores the same catalogue once per
+    # project, which is a disk-usage bug nobody notices until there are ten
+    # projects.
+    ("a scan lands wherever it is pointed",
+     "morpho_homegraph/scan.py",
+     "    if store.role != L0:",
+     "    if False:  # mutated: any store will do",
+     "17 a scan aimed at a project store is refused by role"),
+
+    ("the shared store is not the one holding L0",
+     "morpho_homegraph/store.py",
+     '    "files": (L0,',
+     '    "files": (PROJECT,  # mutated: L0 lives in projects instead',
+     "18 the shared L0 store is the one that has L0"),
+
+    # One lock for everything: correct, in that two writers never collide.
+    # Also means a nightly L0 refresh locks every project out of its own
+    # index for as long as it runs, and nothing about a single-writer run
+    # can see that.
+    ("one guard covers every store, not one per store",
+     "morpho_homegraph/lock.py",
+     '        self.path = self.store_path + ".lock"',
+     '        self.path = os.path.join(  # mutated: a single global guard\n'
+     '            os.path.dirname(os.path.dirname(self.store_path)), "all.lock")',
+     "19 an L0 refresh does not lock a project out"),
+
     # There is no mutation for the `(dev, inode)` directory dedupe, and the
     # reason is written down rather than left as a silent gap: the condition
     # it exists for -- the same directory reachable by two names -- needs a

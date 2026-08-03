@@ -30,7 +30,46 @@ from pathlib import Path
 
 from .lock import Unguarded, holds
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+
+# Two roles, two schemas, and the split is the point. **L0 is shared**: it
+# describes the whole home area, it is identical for every project, and it
+# measured 204.8 MB on 2026-08-03 -- one copy per project would be that number
+# times the number of projects, of byte-identical data. So it lives once, in
+# its own store with its own session guard, and project stores hold the layers
+# that actually differ per project.
+#
+# The role is explicit rather than inferred from the path because it decides
+# which tables exist. A single schema everywhere would give every project a
+# `files` table that must never be filled -- and nothing would stop CP-2 from
+# filling it by accident, which is the kind of mistake that looks like data.
+L0, PROJECT = "l0", "project"
+
+SCHEMA = {
+    # `meta` is in both: every store has to be able to say what it is.
+    "meta": (L0, PROJECT,
+             "CREATE TABLE IF NOT EXISTS meta ("
+             "  key TEXT PRIMARY KEY,"
+             "  value TEXT NOT NULL)"),
+    # L0 (CP-1). The path is the key here, and that is not the rule CP-6
+    # forbids: *a project's* path must never key an id, so that nobody can
+    # treat a path as an identity without meeting the ambiguity CP-6 decides.
+    # L0 is a path index by definition -- it answers "what does the filesystem
+    # look like", and nothing else would serve as its key.
+    #
+    # mtime in nanoseconds as an integer: `st_mtime` is a float and loses
+    # precision on large timestamps, and CP-2 has to tell "same size,
+    # different mtime" from "same both" for real rather than by rounding
+    # introduced here.
+    "files": (L0,
+              "CREATE TABLE IF NOT EXISTS files ("
+              "  path TEXT PRIMARY KEY,"
+              "  kind TEXT NOT NULL,"
+              "  size INTEGER NOT NULL,"
+              "  mtime_ns INTEGER NOT NULL,"
+              "  inode INTEGER NOT NULL,"
+              "  dev INTEGER NOT NULL)"),
+}
 
 # Milliseconds a reader or writer waits on a locked SQLite page before giving
 # up. This is the *page* lock, not the write barrier -- WAL keeps readers off
@@ -55,6 +94,12 @@ def data_home() -> Path:
 
 def db_path(project_id: str) -> Path:
     return data_home() / project_id / "index.db"
+
+
+def l0_path() -> Path:
+    """The one shared L0 store. `l0` is not a valid generated id (16 hex), so
+    it cannot collide with a project directory."""
+    return data_home() / L0 / "index.db"
 
 
 def new_project() -> tuple[str, Path]:
@@ -124,9 +169,11 @@ class Store:
     migrate an out-of-date store, and would create one from a typo.
     """
 
-    def __init__(self, path: str | Path, read_only: bool = False) -> None:
+    def __init__(self, path: str | Path, read_only: bool = False,
+                 role: str = PROJECT) -> None:
         self.path = str(path)
         self.read_only = read_only
+        self.role = role
         if read_only and not os.path.exists(self.path):
             raise FileNotFoundError("no store at %s" % self.path)
         # Refused at open, not at first write. Opening writable already writes
@@ -170,29 +217,10 @@ class Store:
     def migrate(self) -> int:
         """Bring the schema to `SCHEMA_VERSION`. Idempotent. Returns the version."""
         with self.writing():
-            self.db.execute(
-                "CREATE TABLE IF NOT EXISTS meta ("
-                "  key TEXT PRIMARY KEY,"
-                "  value TEXT NOT NULL)")
-            # L0 (CP-1). The path is the key here, and that is not the rule
-            # CP-6 forbids: *a project's* path must never key an id, so that
-            # nobody can treat a path as an identity without meeting the
-            # ambiguity CP-6 decides. L0 is a path index by definition -- it
-            # answers "what does the filesystem look like", and nothing else
-            # would serve as its key.
-            #
-            # mtime in nanoseconds as an integer: `st_mtime` is a float and
-            # loses precision on large timestamps, and CP-2 has to tell
-            # "same size, different mtime" from "same both" for real rather
-            # than by rounding introduced here.
-            self.db.execute(
-                "CREATE TABLE IF NOT EXISTS files ("
-                "  path TEXT PRIMARY KEY,"
-                "  kind TEXT NOT NULL,"
-                "  size INTEGER NOT NULL,"
-                "  mtime_ns INTEGER NOT NULL,"
-                "  inode INTEGER NOT NULL,"
-                "  dev INTEGER NOT NULL)")
+            for roles_and_ddl in SCHEMA.values():
+                *roles, ddl = roles_and_ddl
+                if self.role in roles:
+                    self.db.execute(ddl)
             self.db.commit()
         current = int(self.get_meta("schema_version") or 0)
         if current < SCHEMA_VERSION:

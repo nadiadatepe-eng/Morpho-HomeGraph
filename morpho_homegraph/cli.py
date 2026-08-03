@@ -18,7 +18,9 @@ from datetime import datetime
 from pathlib import Path
 
 from .lock import Locked, StoreLock
-from .store import Store, data_home, db_path, initialise, new_project, projects
+from .scan import scan
+from .store import (L0, Store, data_home, db_path, initialise, l0_path,
+                    new_project, projects)
 
 
 def _resolve(value: str) -> str:
@@ -88,6 +90,17 @@ def cmd_status(args: argparse.Namespace) -> int:
             print("%s  %s" % (pid, path))
         if not rows:
             print("no projects yet: morphofiles-graph add <dir>")
+        # L0 is shared, so it is not one of the projects and would otherwise
+        # never be visible: a catalogue nobody can see the age of is a
+        # catalogue nobody notices has gone stale.
+        if l0_path().is_file():
+            with Store(l0_path(), read_only=True, role=L0) as store:
+                print("l0                %s entries, %s s, root %s"
+                      % (store.get_meta("l0_count"),
+                         store.get_meta("l0_seconds"),
+                         store.get_meta("l0_root")))
+        else:
+            print("l0                not built: morphofiles-graph scan")
         return 0
     store_db = db_path(_resolve(args.project))
     if not store_db.is_file():
@@ -108,18 +121,57 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_update(args: argparse.Namespace) -> int:
-    """Writer. Nothing to scan until CP-1; the barrier is what CP-0 builds."""
-    store_db = db_path(_resolve(args.project))
+def _guard_or_refuse(store_db: Path) -> StoreLock | None:
+    """The guard, or None with the refusal already printed to stderr.
+
+    One function for both writers rather than the same six lines in each.
+    That is not only tidiness: with two copies, a mutation aimed at the
+    refusal hits whichever one the file happens to define first, and the
+    other command's gate stays green while the mutation is recorded as
+    surviving. Measured 2026-08-03 -- two CP-0 mutations went from killed to
+    survived the moment `scan` was added with its own copy.
+
+    Three facts, because a caller can act on all three and on none of a
+    message that says only "busy": who holds it, that they own writing, and
+    that there is no queue and no hand-off to ask for.
+    """
     try:
-        barrier = _guard(store_db)
+        return _guard(store_db)
     except Locked as exc:
-        # Three facts, because a caller can act on all three and on none of a
-        # message that says only "busy": who holds it, that they own writing,
-        # and that there is no queue and no hand-off to ask for.
         print("REFUSED  %s\n(waiting is not offered, and asking that process "
               "to do the job is not built: re-run when it is done)" % exc,
               file=sys.stderr)
+        return None
+
+
+def cmd_scan(args: argparse.Namespace) -> int:
+    """Writer, against the shared L0 store rather than a project's.
+
+    Its own guard, on its own store path: a project update and an L0 refresh
+    are different writers and must not block each other. That falls out of
+    the guard being per store path, which is why decision 12 needed no
+    revisiting when L0 moved out.
+    """
+    store_db = l0_path()
+    store_db.parent.mkdir(parents=True, exist_ok=True)
+    barrier = _guard_or_refuse(store_db)
+    if barrier is None:
+        return 2
+    try:
+        with Store(store_db, role=L0) as store:
+            summary = scan(store, args.root)
+    finally:
+        barrier.release()
+    print("%d entries in %.2f s (%d unreadable directories)"
+          % (summary["count"], summary["seconds"], summary["unreadable"]))
+    return 0
+
+
+def cmd_update(args: argparse.Namespace) -> int:
+    """Writer. Nothing to scan until CP-1; the barrier is what CP-0 builds."""
+    store_db = db_path(_resolve(args.project))
+    barrier = _guard_or_refuse(store_db)
+    if barrier is None:
         return 2
     try:
         with Store(store_db) as store:
@@ -150,6 +202,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_update = sub.add_parser("update", help="write to a project's index")
     p_update.add_argument("project", help="project id or path")
     p_update.set_defaults(func=cmd_update)
+
+    p_scan = sub.add_parser("scan", help="refresh L0, the shared catalogue")
+    p_scan.add_argument("root", nargs="?", default="~",
+                        help="what to catalogue (default: the home area)")
+    p_scan.set_defaults(func=cmd_scan)
     return parser
 
 

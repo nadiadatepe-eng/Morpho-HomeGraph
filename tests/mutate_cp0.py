@@ -50,12 +50,10 @@ MUTATIONS = [
     ("the store file is created before the barrier",
      "morpho_homegraph/cli.py",
      "    store_db = db_path(_resolve(args.project))\n"
-     "    try:\n"
-     "        barrier = _guard(store_db)",
+     "    barrier = _guard_or_refuse(store_db)",
      "    store_db = db_path(_resolve(args.project))\n"
      "    import sqlite3; sqlite3.connect(store_db).close()  # mutated\n"
-     "    try:\n"
-     "        barrier = _guard(store_db)",
+     "    barrier = _guard_or_refuse(store_db)",
      "8b a refused writer creates no store"),
 
     # -- the refusal has to be a fact the caller can act on --------------
@@ -249,14 +247,18 @@ MUTATIONS = [
 
     ("a project's path becomes a key",
      "morpho_homegraph/store.py",
-     '                "  key TEXT PRIMARY KEY,"\n'
-     '                "  value TEXT NOT NULL)")',
-     '                "  key TEXT PRIMARY KEY,"\n'
-     '                "  value TEXT NOT NULL)")\n'
-     '            self.db.execute(  # mutated: the reverse index CP-6 forbids\n'
-     '                "CREATE TABLE IF NOT EXISTS registry ("\n'
-     '                "  project_path TEXT PRIMARY KEY, id TEXT NOT NULL)")',
+     '    "files": (L0,',
+     '    "registry": (L0, PROJECT,  # mutated: the reverse index CP-6 forbids\n'
+     '                 "CREATE TABLE IF NOT EXISTS registry ("\n'
+     '                 "  project_path TEXT PRIMARY KEY, id TEXT NOT NULL)"),\n'
+     '    "files": (L0,',
      "7b no project's path is a key"),
+
+    ("L0 is given to every store, not only the shared one",
+     "morpho_homegraph/store.py",
+     '    "files": (L0,',
+     '    "files": (L0, PROJECT,  # mutated: every project carries a copy',
+     "1b a project store has exactly the tables projects declare"),
 
     ("the schema version is never written",
      "morpho_homegraph/store.py",
@@ -284,12 +286,10 @@ MUTATIONS = [
     ("every writer is refused, contended or not",
      "morpho_homegraph/cli.py",
      "    try:\n"
-     "        barrier = _guard(store_db)\n"
-     "    except Locked as exc:",
+     "        return _guard(store_db)",
      "    try:\n"
      "        raise Locked(str(store_db), {})  # mutated: refuse unconditionally\n"
-     "        barrier = _guard(store_db)\n"
-     "    except Locked as exc:",
+     "        return _guard(store_db)",
      "8  a lone writer is not refused"),
 
     # Dropped 2026-08-03: removing `_HELD.add` was meant to be the negative

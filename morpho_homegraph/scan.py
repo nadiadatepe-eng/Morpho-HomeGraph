@@ -21,6 +21,12 @@ import os
 import time
 from pathlib import Path
 
+from .store import L0
+
+
+class WrongStore(RuntimeError):
+    """L0 was aimed at a store that is not the shared L0 store."""
+
 # What a row's `kind` can be. Kept explicit rather than derived from `stat`
 # bits at read time, so a caller asking "how many directories" does not have
 # to know st_mode.
@@ -90,7 +96,16 @@ def scan(store, root: str | Path) -> dict[str, int | float]:
     The whole walk is one transaction. A half-written L0 is worse than none:
     CP-2 diffs this layer against its previous self, and a truncated scan
     reads as "everything after this point was deleted".
+
+    Refuses a project store outright. L0 is shared -- one copy for the whole
+    home area, 204.8 MB of it measured 2026-08-03 -- and a scan that landed in
+    a project store would be that much duplicated data that nothing reads,
+    growing once per project.
     """
+    if store.role != L0:
+        raise WrongStore(
+            "L0 belongs in the shared store, not in a %r one: %s"
+            % (store.role, store.path))
     started = time.perf_counter()
     counted = {"kept": 0, "unreadable": 0}
 

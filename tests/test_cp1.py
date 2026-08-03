@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -30,9 +31,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from report import reporter  # noqa: E402
 
-from morpho_homegraph.lock import StoreLock, Unguarded  # noqa: E402
-from morpho_homegraph.scan import scan, walk  # noqa: E402
-from morpho_homegraph.store import Store, db_path, new_project  # noqa: E402
+from morpho_homegraph.lock import Locked, StoreLock, Unguarded  # noqa: E402
+from morpho_homegraph.scan import WrongStore, scan, walk  # noqa: E402
+from morpho_homegraph.store import (  # noqa: E402
+    L0, PROJECT, Store, data_home, db_path, l0_path, new_project)
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 results, check = reporter(56)
@@ -290,17 +292,32 @@ def gates_strace(tree):
 
 # -- 12. the scan is a write, and writes are guarded -----------------------
 
+def l0_store():
+    """The shared L0 store, created on demand. Returns its path."""
+    path = l0_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def gates_store(tree):
-    project_id, store_db = new_project()
+    store_db = l0_store()
     guard = StoreLock(str(store_db)).acquire()
     try:
-        with Store(store_db) as store:
-            summary = scan(store, tree)
-            rows = store.db.execute("SELECT COUNT(*) FROM files").fetchone()[0]
-            check("14 the scan records its count and its time",
-                  rows == summary["count"] > 5
-                  and float(store.get_meta("l0_seconds")) > 0,
-                  "%d rows in %s s" % (rows, store.get_meta("l0_seconds")))
+        with Store(store_db, role=L0) as store:
+            # A scan that cannot run against the shared store is gate 14
+            # failing. Letting it raise would take gates 15 to 19 with it and
+            # report a crash instead of naming this one.
+            try:
+                summary = scan(store, tree)
+                rows = store.db.execute(
+                    "SELECT COUNT(*) FROM files").fetchone()[0]
+                check("14 the scan records its count and its time",
+                      rows == summary["count"] > 5
+                      and float(store.get_meta("l0_seconds")) > 0,
+                      "%d rows in %s s" % (rows, store.get_meta("l0_seconds")))
+            except (WrongStore, sqlite3.Error) as exc:
+                check("14 the scan records its count and its time", False,
+                      "the shared store could not take L0: %r" % exc)
     finally:
         guard.release()
 
@@ -316,9 +333,10 @@ def gates_store(tree):
     # is answerable. On the shared one it was not: the scan wrote its rows
     # unguarded and only died later, on `set_meta`, and the gate read that as
     # a refusal. Raising is not the property -- writing nothing is.
-    _, fresh_db = new_project()
+    fresh_db = data_home() / "l0-unguarded" / "index.db"
+    fresh_db.parent.mkdir(parents=True, exist_ok=True)
     outlived = StoreLock(str(fresh_db)).acquire()
-    fresh = Store(fresh_db)
+    fresh = Store(fresh_db, role=L0)
     outlived.release()
     try:
         scan(fresh, tree)
@@ -338,19 +356,95 @@ def gates_store(tree):
     victim = os.path.join(tree, "b.md")
     guard = StoreLock(str(store_db)).acquire()
     try:
-        with Store(store_db) as store:
-            before = scan(store, tree)["count"]
-            os.remove(victim)
-            after = scan(store, tree)["count"]
-            rows = store.db.execute("SELECT COUNT(*) FROM files").fetchone()[0]
-            stale = store.db.execute(
-                "SELECT COUNT(*) FROM files WHERE path = ?", (victim,)
-            ).fetchone()[0]
+        with Store(store_db, role=L0) as store:
+            try:
+                before = scan(store, tree)["count"]
+                os.remove(victim)
+                after = scan(store, tree)["count"]
+                rows = store.db.execute(
+                    "SELECT COUNT(*) FROM files").fetchone()[0]
+                stale = store.db.execute(
+                    "SELECT COUNT(*) FROM files WHERE path = ?", (victim,)
+                ).fetchone()[0]
+                check("15 a rescan replaces the layer, it does not accumulate",
+                      after == before - 1 and rows == after and stale == 0,
+                      "%d -> %d rows, %d stale" % (before, after, stale))
+            except (WrongStore, sqlite3.Error) as exc:
+                # Same reason as gate 14 above: a scan that cannot run is this
+                # gate failing, and letting it raise would take gates 16 to 19
+                # with it and report a crash that names nothing.
+                check("15 a rescan replaces the layer, it does not accumulate",
+                      False, "the scan could not run: %r" % exc)
     finally:
         guard.release()
-    check("15 a rescan replaces the layer, it does not accumulate",
-          after == before - 1 and rows == after and stale == 0,
-          "%d -> %d rows, %d stale" % (before, after, stale))
+
+
+# -- 16-19. L0 is shared, and shared means one copy with its own guard ------
+
+def gates_shared_l0(tree):
+    """Decided 2026-08-03 after M-1 measured L0 at 204.8 MB.
+
+    One copy per project would be that number times the number of projects,
+    of byte-identical data. The gates below are what make "shared" a fact
+    about the code rather than a sentence in the plan.
+    """
+    project_id, project_db = new_project()
+    guard = StoreLock(str(project_db)).acquire()
+    try:
+        with Store(project_db, role=PROJECT) as store:
+            tables = {r[0] for r in store.db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            check("16 a project store has no L0 table to fill by accident",
+                  tables == {"meta"}, "tables=%s" % sorted(tables))
+            # Refused rather than merely undeclared: without the check, a
+            # caller that created the table first would be allowed to fill it.
+            #
+            # Both refusals are caught so the harness cannot crash, but only
+            # the role check passes the gate. The missing table is a backstop,
+            # not the mechanism: accepting it would make this gate green with
+            # the role check deleted -- measured, 2026-08-03, the mutation
+            # survived exactly that way. What is under test is that the store
+            # says *why*, not merely that nothing was written.
+            try:
+                scan(store, tree)
+                how = "ALLOWED"
+            except WrongStore:
+                how = "refused by the role check"
+            except sqlite3.Error as exc:
+                how = "refused only by the missing table (%s)" % exc
+            check("17 a scan aimed at a project store is refused by role",
+                  how == "refused by the role check", how)
+    finally:
+        guard.release()
+
+    # Created here rather than relying on an earlier block having built it.
+    # These are schema gates and they run before any behaviour gate, so a
+    # scan that cannot run cannot also hide the reason -- measured
+    # 2026-08-03: with `files` moved to the project role, the mutation was
+    # attributed to gate 14 because gate 18 never got to speak.
+    l0_guard = StoreLock(str(l0_store())).acquire()
+    try:
+        with Store(l0_path(), role=L0) as store:
+            tables = {r[0] for r in store.db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            check("18 the shared L0 store is the one that has L0",
+                  tables == {"meta", "files"}, "tables=%s" % sorted(tables))
+    finally:
+        l0_guard.release()
+
+    # The two guards are separate because they are separate store paths, which
+    # is why moving L0 out needed no change to decision 12. Without this, a
+    # nightly L0 refresh would lock every project out of its own index.
+    l0_guard = StoreLock(str(l0_path())).acquire()
+    try:
+        project_guard = StoreLock(str(project_db)).acquire()
+        both = True
+        project_guard.release()
+    except Locked:
+        both = False
+    finally:
+        l0_guard.release()
+    check("19 an L0 refresh does not lock a project out", both)
     return db_path(project_id)
 
 
@@ -365,6 +459,7 @@ def main():
             gates_vanishing(work)
             gates_audit_hook(tree)
             gates_strace(tree)
+            gates_shared_l0(tree)
             gates_store(tree)
         finally:
             # Without this the temporary directory cannot be removed, and the

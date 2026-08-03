@@ -190,11 +190,14 @@ def gates_store(tree):
               first == str(SCHEMA_VERSION), "schema_version=%s" % first)
         tables = {r[0] for r in store.db.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
-        # Grows one entry per checkpoint that adds a table, on purpose: an
-        # equality here is what makes a table nobody declared show up as a
-        # failure rather than as nothing.
-        check("1b the schema is the one the checkpoints declare",
-              tables == {"meta", "files"}, "tables=%s" % sorted(tables))
+        # A *project* store, so `files` is deliberately absent: L0 is shared
+        # and lives in its own store (decided 2026-08-03 after M-1 measured it
+        # at 204.8 MB -- one copy per project would be that, times the number
+        # of projects, of identical data). An equality rather than a subset,
+        # so a table nobody declared shows up as a failure rather than as
+        # nothing.
+        check("1b a project store has exactly the tables projects declare",
+              tables == {"meta"}, "tables=%s" % sorted(tables))
 
     guard = take(db, "2  migrating twice changes nothing")
     if guard is None:
