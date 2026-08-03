@@ -28,6 +28,8 @@ import sqlite3
 import threading
 from pathlib import Path
 
+from .lock import Unguarded, holds
+
 SCHEMA_VERSION = 1
 
 # Milliseconds a reader or writer waits on a locked SQLite page before giving
@@ -127,6 +129,11 @@ class Store:
         self.read_only = read_only
         if read_only and not os.path.exists(self.path):
             raise FileNotFoundError("no store at %s" % self.path)
+        # Refused at open, not at first write. Opening writable already writes
+        # -- it sets the journal mode and migrates -- so a check further in
+        # would be a check after the fact.
+        if not read_only and not holds(self.path):
+            raise Unguarded(self.path)
         # `check_same_thread=False` and `writing()` are one decision, not two.
         # The service scans on one thread and answers on another, so Python's
         # own thread guard has to come off -- and the moment it does, the
@@ -193,12 +200,19 @@ class Store:
 
     @contextlib.contextmanager
     def writing(self):
-        """Serialise writes within this process.
+        """Serialise writes within this process, and refuse an unguarded one.
 
         Every write in the package goes through here, so the service can run
         its scan on one thread and answer a request on another without either
         of them learning about the other.
+
+        The guard is re-checked here as well as at open, because a process can
+        release it while a `Store` object is still alive -- and a store handle
+        that outlives the guard is exactly the case where a stale object goes
+        on writing after another process has taken over.
         """
+        if not holds(self.path):
+            raise Unguarded(self.path)
         with self._write_lock:
             yield self.db
 

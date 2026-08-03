@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation test for CP-0 -- the store and the write barrier.
+"""Mutation test for CP-0 -- the store and the session guard.
 
 A refusal gate is the easiest thing here to write and the hardest to trust: it
 can pass because the barrier works, because the second process failed for an
@@ -13,6 +13,10 @@ everything passes every refusal gate in this file. A store that assigns
 `journal_mode = "wal"` without asking passes every gate that reads the
 attribute. A `writing()` that serialises nothing still lands every write.
 
+Two mutations exist to prove the *rewrite* was worth it, not just that the
+code works: `the payload decides liveness, not the kernel` puts the previous
+design back, and gate 12 -- a holder killed with SIGKILL -- is what says no.
+
 Run:
     python3 tests/mutate_cp0.py
 """
@@ -25,35 +29,31 @@ from mutate import run
 MUTATIONS = [
     # -- the barrier itself ---------------------------------------------
     #
-    # The state the package would be in without CP-0: writers open the store
-    # and go. Every single-writer behaviour is unchanged, which is why no
-    # other checkpoint could ever see this.
-    ("no guard is taken at all",
+    # The guard is registered but never actually taken: the store is happy,
+    # every single-writer run is unchanged, and two writers proceed together.
+    # This is what "the barrier is a policy nobody enforces" looks like from
+    # the outside -- which is why it has to be tested from the outside.
+    ("the guard is registered but never taken",
      "morpho_homegraph/cli.py",
-     "    try:\n"
-     "        barrier = _guard(store_db)\n"
-     "    except Locked as exc:",
-     "    try:\n"
-     "        barrier = StoreLock(str(store_db))  # mutated: never acquired\n"
-     "    except Locked as exc:",
+     "    return StoreLock(str(store_db)).acquire()",
+     "    from .lock import _HELD  # mutated: registered, never locked\n"
+     "    _HELD.add(str(store_db))\n"
+     "    return StoreLock(str(store_db))",
      "9  a second writer is refused"),
 
-    ("the second writer waits instead of refusing",
+    ("the guard queues instead of refusing",
      "morpho_homegraph/lock.py",
-     "            if live:\n"
-     "                raise Locked(self.store_path, holder)",
-     "            if live:\n"
-     "                import time; time.sleep(0.05)  # mutated: queue, do not refuse\n"
-     "                continue",
+     "            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)",
+     "            fcntl.flock(fd, fcntl.LOCK_EX)  # mutated: wait, do not refuse",
      "9  a second writer is refused"),
 
-    ("the guard is taken after the store is opened",
+    ("the store file is created before the barrier",
      "morpho_homegraph/cli.py",
      "    store_db = db_path(_resolve(args.project))\n"
      "    try:\n"
      "        barrier = _guard(store_db)",
      "    store_db = db_path(_resolve(args.project))\n"
-     "    Store(store_db).close()  # mutated: store first, barrier second\n"
+     "    import sqlite3; sqlite3.connect(store_db).close()  # mutated\n"
      "    try:\n"
      "        barrier = _guard(store_db)",
      "8b a refused writer creates no store"),
@@ -69,111 +69,136 @@ MUTATIONS = [
 
     ("the refusal stops saying there is no queue",
      "morpho_homegraph/lock.py",
-     '            "pid %s owns writing to this store, since %s%s" % (pid, since, extra))',
-     '            "the store is busy (pid %s, %s)%s" % (pid, since, extra))  # mutated',
+     '            "pid %s owns writing to this store, since %s"\n'
+     '            % (holder.get("pid", "?"), holder.get("created", "?")))',
+     '            "the store is busy (pid %s, %s)"  # mutated\n'
+     '            % (holder.get("pid", "?"), holder.get("created", "?")))',
      "10 the refusal says who owns writing"),
 
-    # -- liveness: a pid is not a process --------------------------------
+    # -- the kernel decides, not a file we wrote --------------------------
     #
-    # Works perfectly until a pid is reused, then the store is unwritable
-    # until someone deletes the file by hand. The gate plants that state.
-    ("a live pid is enough; start time is not checked",
+    # This puts the previous design back: a payload on disk decides whether
+    # someone holds the guard. Every polite exit still works, because a
+    # process that releases cleanly rewrites the file. Only a holder that
+    # died without the chance shows it.
+    ("the payload decides liveness, not the kernel",
      "morpho_homegraph/lock.py",
-     '    if now == recorded:\n'
-     '        return True, "running"',
-     '    if now is not None:\n'
-     '        return True, "running"  # mutated: pid alone decides',
-     "14 a live pid with the wrong start time is stale"),
+     "            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)",
+     "            if self.read_holder().get(\"pid\") not in (None, os.getpid()):\n"
+     "                raise BlockingIOError(\"mutated: the file decides\")",
+     "12 a SIGKILLed holder does not block the next writer"),
 
-    ("a dead holder's lock is treated as live",
+    # There is deliberately no mutation for gate 15 either, and for a better
+    # reason than gate 4's: the payload is not consulted when deciding
+    # anything, so "an unreadable payload blocks nobody" is now true by
+    # construction. The first attempt at a mutation here made `read_holder`
+    # raise -- and changed nothing, because it is only ever called after the
+    # kernel has already refused someone. That is trap 2 in the plan: a
+    # property that started holding by construction looks stronger in the
+    # diff and proves less. Gate 15 stays as the thing that would catch
+    # someone reintroducing payload-based decisions, and is recorded here as
+    # unreddenable rather than left to look like coverage.
+
+    # -- the lock file must not be deleted, and must not be written early --
+    ("the lock file is deleted on release",
      "morpho_homegraph/lock.py",
-     '    if now is None:\n'
-     '        return False, "no such process"',
-     '    if now is None:\n'
-     '        return True, "no such process"  # mutated',
-     "12 a lock from a dead process is recognised as stale"),
+     "            fcntl.flock(self.fd, fcntl.LOCK_UN)\n"
+     "            os.close(self.fd)",
+     "            fcntl.flock(self.fd, fcntl.LOCK_UN)\n"
+     "            os.close(self.fd)\n"
+     "            os.unlink(self.path)  # mutated: delete it, race the inode",
+     "18 a clean run leaves the lock file, but free"),
 
-    ("an unparseable lock blocks every writer",
+    ("the payload is written before the lock is won",
      "morpho_homegraph/lock.py",
-     '        return False, "unreadable lock file"',
-     '        return True, "unreadable lock file"  # mutated',
-     "15 an unparseable lock does not block a writer"),
+     "        fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)\n"
+     "        try:",
+     "        fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)\n"
+     "        os.ftruncate(fd, 0)  # mutated: announce before winning\n"
+     "        os.write(fd, self._payload())\n"
+     "        try:",
+     "11 a refused writer leaves the holder's payload alone"),
 
-    ("orphans are cleared in silence",
+    # Named gate 8, not 19, and the reason is worth keeping: a guard that is
+    # never released shows up first as the *next* writer being refused, not
+    # as the release itself failing. Gate 19 would also go red -- but only if
+    # the suite reached it, and under this mutation the harness is already
+    # holding a guard it thinks it dropped.
+    ("the guard is never released",
      "morpho_homegraph/lock.py",
-     '            if self.on_stale is not None:\n'
-     '                self.on_stale("cleared a stale lock left by pid %s (%s)"\n'
-     '                              % (holder.get("pid", "?"), why))',
-     "            if False:  # mutated: clear quietly\n"
-     "                pass",
-     "13 clearing an orphan is announced, not silent"),
+     "        if not self.held:\n"
+     "            return\n"
+     "        self.held = False\n"
+     "        _HELD.discard(self.store_path)",
+     "        if not self.held:\n"
+     "            return\n"
+     "        return  # mutated: hold it for ever",
+     "8  a lone writer is not refused"),
 
-    # -- the read-back, which nothing else can see ------------------------
+    # -- the store enforces the guard, it does not assume it --------------
+    ("the store stops asking whether the guard is held",
+     "morpho_homegraph/lock.py",
+     "    return str(store_path) in _HELD",
+     "    return True  # mutated: everyone holds everything",
+     "21 a writable store without the guard is refused"),
+
+    ("releasing leaves the store still believing it is guarded",
+     "morpho_homegraph/lock.py",
+     "        _HELD.discard(self.store_path)",
+     "        pass  # mutated: registration outlives the lock",
+     "21 a writable store without the guard is refused"),
+
+    ("writes are checked at open but never again",
+     "morpho_homegraph/store.py",
+     "        if not holds(self.path):\n"
+     "            raise Unguarded(self.path)\n"
+     "        with self._write_lock:",
+     "        with self._write_lock:  # mutated: open-time check only",
+     "21b a store handle that outlives its guard cannot write"),
+
+    # -- a guard that cannot be exclusive is not handed out ----------------
     #
-    # Dropping it changes no observable behaviour until two processes clear
-    # the same orphan and the loser deletes the winner's fresh file.
-    ("the nonce is never read back",
+    # The whole class this refuses is silent: over NFS with `local_lock`, the
+    # lock is taken, granted, and visible to exactly one machine. Nothing
+    # fails. Two machines write the same index.
+    ("the store is guarded wherever it happens to live",
      "morpho_homegraph/lock.py",
-     "                held = _read(self.path)\n"
-     "                if held.get(\"nonce\") == self.nonce:\n"
-     "                    self.held = True\n"
-     "                    return self\n"
-     "                raise Locked(self.store_path, held)",
-     "                self.held = True  # mutated: trust O_CREAT|O_EXCL alone\n"
-     "                return self",
-     "11b a lock overwritten in the window is not ours"),
+     "        if fstype not in LOCAL_FILESYSTEMS and os.environ.get(ALLOW_REMOTE) != \"1\":\n"
+     "            raise NotLocal(self.store_path, fstype)",
+     "        pass  # mutated: guard anything, anywhere",
+     "25 a store we cannot guard exclusively is refused"),
 
-    # -- the lock must not outlive, nor overreach -------------------------
-    ("the lock is never released",
+    ("the override is ignored, so nothing can be overridden",
      "morpho_homegraph/lock.py",
-     "        try:\n"
-     "            os.unlink(self.path)\n"
-     "        except FileNotFoundError:\n"
-     "            pass\n\n"
-     "    def __enter__",
-     "        pass  # mutated: lock file left behind\n\n"
-     "    def __enter__",
-     "18 a clean run leaves no lock behind"),
+     "        if fstype not in LOCAL_FILESYSTEMS and os.environ.get(ALLOW_REMOTE) != \"1\":",
+     "        if fstype not in LOCAL_FILESYSTEMS:  # mutated: no way out",
+     "25b the override is honoured when it is set"),
 
-    ("release unlinks whatever lock is there, not only its own",
+    ("a mount point matches on string prefix, not at a separator",
      "morpho_homegraph/lock.py",
-     '        holder = _read(self.path)\n'
-     '        if holder.get("nonce") != self.nonce:',
-     '        holder = _read(self.path)  # mutated: release anyone\'s lock\n'
-     '        if False:',
-     # Gate 18b, not 11. Gate 11's refused writer never held anything, so its
-     # `release` returns at `if not self.held` and never reaches this check --
-     # which is why 18b had to be written before this mutation could be
-     # attributed to anything.
-     "18b release does not unlink a lock taken by someone else"),
+     '        if target != point and not target.startswith(point.rstrip("/") + "/"):\n'
+     "            continue",
+     "        if not target.startswith(point):  # mutated: /home eats /homegraph\n"
+     "            continue",
+     "23c a mount point matches at a separator, not a prefix"),
 
-    ("the lock leaks when the writer is interrupted",
+    ("the first matching mount wins, not the longest",
      "morpho_homegraph/lock.py",
-     "    def __exit__(self, *exc: object) -> None:\n"
-     "        # Releases on KeyboardInterrupt too: an interrupted writer must leave\n"
-     "        # nothing behind, and a lock file is something.\n"
-     "        self.release()",
-     "    def __exit__(self, *exc: object) -> None:\n"
-     "        if exc[0] is None:  # mutated: leak the lock on the error path\n"
-     "            self.release()",
-     "19 KeyboardInterrupt releases the lock"),
+     "        if len(point) >= len(best_point):\n"
+     "            best_point, best_type = point, fstype",
+     "        if not best_type:  # mutated: first match wins\n"
+     "            best_point, best_type = point, fstype",
+     "23 an NFS mount is not a filesystem we can guard"),
 
     # -- readers must not be caught by the barrier ------------------------
-    ("readers take the write barrier too",
+    ("readers take the guard too",
      "morpho_homegraph/cli.py",
      '    """Reader. Takes no lock, creates no store, answers while a writer writes."""',
      '    StoreLock(str(db_path(_resolve(args.project)))).acquire()  # mutated',
-     "16 a reader answers while a writer holds the lock"),
+     "16 a reader answers while a writer holds the guard"),
 
-    # -- WAL and the timeout have to be in force, not merely assigned -----
-    ("the journal mode is claimed rather than read",
-     "morpho_homegraph/store.py",
-     '            else "PRAGMA journal_mode = WAL").fetchone()\n'
-     '        self.journal_mode = (row[0] if row else "unknown").lower()',
-     '            else "PRAGMA journal_mode = DELETE").fetchone()\n'
-     '        self.journal_mode = "wal"  # mutated: claim it without asking',
-     "3  WAL is in force on a local file"),
-
+    # -- WAL has to be in force, not merely assigned ----------------------
+    #
     # There is deliberately no mutation for `busy_timeout`. Measured
     # 2026-08-03: 5000 ms is `sqlite3.connect`'s own default, so no edit to
     # this package can move the value the gate reads -- a mutation that
@@ -182,11 +207,19 @@ MUTATIONS = [
     # number, not a gate this harness can redden. Written down rather than
     # left as a permanent survivor, because a survivor list nobody can act on
     # is how a real one gets ignored.
+    ("the journal mode is claimed rather than read",
+     "morpho_homegraph/store.py",
+     '            else "PRAGMA journal_mode = WAL").fetchone()\n'
+     '        self.journal_mode = (row[0] if row else "unknown").lower()',
+     '            else "PRAGMA journal_mode = DELETE").fetchone()\n'
+     '        self.journal_mode = "wal"  # mutated: claim it without asking',
+     "3  WAL is in force on a local file"),
 
     # -- identity ---------------------------------------------------------
     #
-    # Found in review rather than by a gate, which is why the gate was written
-    # afterwards and this mutation exists to prove it can say no.
+    # The first of these was found in review rather than by a gate, which is
+    # why the gate was written afterwards and this mutation exists to prove
+    # it can say no.
     ("any existing directory is accepted as an id",
      "morpho_homegraph/cli.py",
      "    if candidate.parent == data_home() and candidate.is_dir():",
@@ -237,10 +270,6 @@ MUTATIONS = [
     #
     # If a lone writer is refused, every refusal gate above is measuring
     # something other than contention.
-    # Aimed at `update` alone, not at `_guard`: refusing in `_guard` also
-    # breaks `add`, the suite cannot build a project, and the run reports a
-    # crash instead of naming the gate. A mutation that takes the harness
-    # down proves nothing about the gate it was written for.
     ("every writer is refused, contended or not",
      "morpho_homegraph/cli.py",
      "    try:\n"
@@ -252,15 +281,14 @@ MUTATIONS = [
      "    except Locked as exc:",
      "8  a lone writer is not refused"),
 
-    ("nothing is ever considered live",
-     "morpho_homegraph/lock.py",
-     "    try:\n"
-     '        pid = int(holder["pid"])',
-     '    return False, "mutated: never live"\n'
-     "    try:\n"
-     '        pid = int(holder["pid"])',
-     "14b a live pid with the right start time is live"),
+    # Dropped 2026-08-03: removing `_HELD.add` was meant to be the negative
+    # control for the registration, but it does not produce a silent defect --
+    # every command dies with a named `Unguarded` before any gate runs, which
+    # is a broken build rather than a barrier that quietly stopped working.
+    # Mutations are for defects that survive a green suite. The registration's
+    # negative control is "the store stops asking whether the guard is held",
+    # above, which gate 21 kills.
 ]
 
 if __name__ == "__main__":
-    sys.exit(run(MUTATIONS, "test_cp0.py", prefix="mut0-", timeout=600))
+    sys.exit(run(MUTATIONS, "test_cp0.py", prefix="mut0-", timeout=900))

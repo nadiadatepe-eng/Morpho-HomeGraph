@@ -1,256 +1,266 @@
 #!/usr/bin/env python3
-"""One writer per store. It refuses; it does not queue.
+"""One writer per store, for as long as the session lasts. The kernel decides.
 
-**Two mechanisms here are borrowed from homegraph's `lock.py`, copied
-unchanged** (registered in `~/Dokumenter/laante-ideer-homegraph.html`):
+**Nothing here is borrowed.** homegraph's `lock.py` was written for a barrier
+taken around each write, and it carries the machinery that shape needs: a pid,
+a boot-relative start time, a staleness test, orphan clearing, a nonce read
+back after `O_CREAT|O_EXCL`. All of it exists because **a lock file outlives
+the process that wrote it** -- it is cleanup after an orphan, not a lock.
 
-  * pid **plus boot-relative start time** as the staleness test, and
-  * the **nonce read-back** after `O_CREAT|O_EXCL`.
+Here the barrier's lifetime *is* the session's: taken at startup, released
+when the process ends, however it ends. A lock with that lifetime should be
+one the kernel holds. `fcntl.flock` on a file descriptor kept open for the
+life of the process is released by the kernel on exit, on `SIGKILL`, on a
+crash, on the power going out. So an orphaned lock cannot exist, and every
+mechanism for detecting and clearing one has no work to do.
 
-Both cost a CP-11 mutation round there to get right -- a reused pid that reads
-as live forever, and two processes that both clear the same orphan. Copying
-them is cheaper than re-deriving them, and re-deriving them is how you get the
-first version back. `~/homegraph` itself is not modified.
+That is not only simpler, it removes the one thing that was actually broken.
+The borrowed scheme had a window where two writers both hold the guard: both
+read the same orphan, both judge it stale, A clears it and takes the lock, and
+B's already-decided `unlink` then removes A's *live* lock. The read-back does
+not close it -- it only catches a loser who writes before the winner reads
+back. The race was produced by the orphan clearing. Delete the clearing and
+the race goes with it -- the tool that reproduced it went with it too, and
+`tools/cp0_contention.py` took its place: twelve processes released at the
+same instant, one winner.
 
-**The policy around them is new** (locked decision 12, 2026-08-03). In
-homegraph the barrier was per *write*: `update` took it, did its work, dropped
-it. Here the service is the only writer, so the barrier is **per process**:
-the lock is taken at startup and held for the whole lifetime, by the service
-and by a one-shot CLI writer alike. Inside the process, writes queue on a
-`threading.Lock` (`Store.writing()`), because a process knows about its own
-waiting and a stranger does not. That asymmetry is the whole design: refuse
-across processes, queue within one.
+**The lock file is never deleted.** Deleting it reintroduces exactly that
+class one level down: A holds the lock on inode X and unlinks it, B creates a
+new file with inode Y and locks that, and both hold a lock on a different
+inode. `index.db.lock` stays on disk forever. What is in it is **payload** --
+a pid and a timestamp, so a refusal can name the holder. The payload decides
+nothing; the flock does.
 
-The consequence is deliberate and has to be stated rather than discovered:
-**with the service running, a hand-written `morphofiles-graph update` is
-refused for as long as the service lives.** The refusal names the service's
-pid and says it owns writing. A path for the CLI to ask the service to do the
-job is not built now.
+**It refuses; it does not queue.** `LOCK_NB`, and a caller who is told which
+pid owns writing and that there is no queue to join. A queue would make a
+second writer wait on a first that may be rebuilding a 600k-file corpus, and
+its caller -- a cron line, a shell loop -- has no way to know it is waiting
+rather than working.
 
-**A pid is not enough to decide a lock is stale.** Pids are reused. A lock file
-left behind by a crash whose number has since been handed to a browser tab
-would read as live forever, and the store would be unwritable until someone
-deleted the file by hand. So the lock records the holder's boot-relative start
-time as well, and a pid that is alive with a *different* start time is a
-different process wearing a dead one's number.
+**A store that is not on local disk is refused, not guarded.** `flock` over a
+network filesystem is the dangerous kind of unreliable: on Linux since 2.6.37
+it is emulated with POSIX locks and usually does work across NFS clients --
+*unless* the mount carries `local_lock`, which makes every lock local to its
+own machine without saying so. Then the barrier looks exactly like a barrier
+and two machines write the same index. Rather than guess which case we are
+in, `acquire` proves the store is on a filesystem this kernel alone arbitrates
+and refuses otherwise, naming the fix: the corpus can live anywhere, only the
+index has to be local, and `MORPHO_HOMEGRAPH_HOME` moves the index.
 
-**The residual race is closed by verifying after writing, not by locking
-harder.** Two processes can both find a stale lock and both unlink it; only one
-`O_CREAT|O_EXCL` succeeds, but the loser may have removed the winner's fresh
-file. So the writer re-reads the lock it believes it took and checks its own
-nonce is the one on disk. Whoever's nonce survives owns the lock; the other
-refuses. Without that read-back the window is small, silent, and exactly the
-thing this module exists to prevent.
+The list is an allowlist. A denylist that misses one filesystem fails in the
+direction this whole module exists to avoid.
+
+One property that needed no fixing, measured 2026-08-03 rather than assumed:
+`flock` follows the open file description, so a `fork()` **shares** the guard
+with the child. An `exec` does not -- `os.open` returns a non-inheritable
+descriptor since Python 3.4 (PEP 446), verified with `os.get_inheritable`. So
+a spawned subprocess cannot keep a store locked after the service that spawned
+it dies, and a forked worker deliberately can.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
-import secrets
-from typing import Any, Callable
+from datetime import datetime
+from typing import Any
 
-# Liveness is decided from /proc when it exists. Elsewhere -- macOS, BSD --
-# only `kill(pid, 0)` is available, which cannot tell a reused pid from the
-# original. The lock still works there; it is one guarantee weaker, and the
-# refusal says so rather than implying otherwise.
-HAVE_PROC = os.path.isdir("/proc/self")
+# Store paths this process currently guards. `Store` asks before writing, so
+# that "the service is the only writer" is enforced by the store rather than
+# remembered by whoever opens it -- a rule that lives in one caller is a habit,
+# and holds exactly until the second caller.
+_HELD: set[str] = set()
+
+
+def holds(store_path: str) -> bool:
+    """Does *this process* hold the guard for `store_path`?"""
+    return str(store_path) in _HELD
+
+
+# Filesystems whose `flock` is decided by this kernel and nobody else, so a
+# lock taken here is one every process on this machine can see. An allowlist,
+# because a denylist that has not heard of a filesystem lets it through.
+LOCAL_FILESYSTEMS = frozenset((
+    "ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "f2fs", "jfs", "reiserfs",
+    "bcachefs", "tmpfs", "overlay", "vfat", "exfat", "ntfs3", "fuseblk",
+))
+
+# For a machine that knows its store is fine on a filesystem this does not
+# recognise. Named in the refusal, so it is a decision rather than a discovery.
+ALLOW_REMOTE = "MORPHO_HOMEGRAPH_ALLOW_REMOTE_STORE"
+
+# mountinfo escapes exactly these four characters in the mount point.
+_ESCAPES = (("\\011", "\t"), ("\\012", "\n"), ("\\040", " "), ("\\134", "\\"))
+
+
+def filesystem_of(path: str, mountinfo: str | None = None) -> str:
+    """The filesystem type of the mount containing `path`; `""` if unknowable.
+
+    `mountinfo` is the text of `/proc/self/mountinfo`, taken as an argument so
+    the gate can hand it an NFS mount without one being available -- a check
+    that can only be exercised on a machine that happens to have the wrong
+    filesystem is a check nobody runs.
+    """
+    if mountinfo is None:
+        try:
+            with open("/proc/self/mountinfo", encoding="utf-8") as fh:
+                mountinfo = fh.read()
+        except OSError:
+            # No /proc: we cannot prove anything about this path, and saying
+            # so is the answer. The caller refuses rather than assuming.
+            return ""
+    target = os.path.abspath(path)
+    best_point, best_type = "", ""
+    for line in mountinfo.splitlines():
+        fields = line.split()
+        if "-" not in fields:
+            continue
+        sep = fields.index("-")
+        if sep + 1 >= len(fields) or sep < 5:
+            continue
+        point = fields[4]
+        for code, char in _ESCAPES:
+            point = point.replace(code, char)
+        fstype = fields[sep + 1]
+        # `/home` must not claim `/homegraph`, so a prefix only counts when it
+        # ends at a separator. Longest match wins: mounts nest.
+        if target != point and not target.startswith(point.rstrip("/") + "/"):
+            continue
+        if len(point) >= len(best_point):
+            best_point, best_type = point, fstype
+    return best_type
+
+
+class NotLocal(RuntimeError):
+    """The store is not on a filesystem whose locks this kernel decides."""
+
+    def __init__(self, store_path: str, fstype: str) -> None:
+        self.store_path = store_path
+        self.fstype = fstype
+        super().__init__(
+            "%s is on %s, where a lock may be local to one machine while "
+            "looking like a lock on all of them -- two writers would not see "
+            "each other. Point the index at local disk with "
+            "MORPHO_HOMEGRAPH_HOME (the corpus can stay where it is; only the "
+            "index has to be local), or set %s=1 if you know this filesystem "
+            "arbitrates flock across every machine that reaches it."
+            % (store_path, fstype or "a filesystem that cannot be identified",
+               ALLOW_REMOTE))
 
 
 class Locked(RuntimeError):
-    """Another live writer holds this store."""
+    """Another live process holds this store's guard."""
 
     def __init__(self, path: str, holder: dict[str, Any]) -> None:
         self.path = path
         self.holder = holder
-        pid = holder.get("pid", "?")
-        since = holder.get("created", "?")
-        extra = ""
-        if not HAVE_PROC:
-            extra = " (no /proc: a reused pid cannot be told from the original)"
         super().__init__(
-            "pid %s owns writing to this store, since %s%s" % (pid, since, extra))
+            "pid %s owns writing to this store, since %s"
+            % (holder.get("pid", "?"), holder.get("created", "?")))
 
 
-def _start_time(pid: int) -> int | None:
-    """Boot-relative start time of `pid`, or None if it is not running.
+class Unguarded(RuntimeError):
+    """A write was attempted by a process that does not hold the guard."""
 
-    `comm` is field 2 of /proc/pid/stat and may contain spaces and
-    parentheses, so the fixed-width tail is everything after the LAST ')'.
-    That tail begins at field 3, which puts starttime (field 22) at index 19.
-    Splitting the whole line on whitespace instead is the classic way to read
-    the wrong number for any process whose name has a space in it.
-    """
-    try:
-        with open("/proc/%d/stat" % pid, "rb") as fh:
-            tail = fh.read().rsplit(b")", 1)[-1].split()
-        return int(tail[19])
-    except (OSError, ValueError, IndexError):
-        return None
-
-
-def _liveness(holder: dict[str, Any]) -> tuple[bool, str]:
-    """(is the holder still running, why we say so).
-
-    The reason is returned rather than reconstructed by the caller because
-    the three ways a lock goes stale are not interchangeable, and a message
-    that says "no such process" about a pid that is plainly running sends the
-    reader looking for the wrong bug.
-    """
-    try:
-        pid = int(holder["pid"])
-    except (KeyError, TypeError, ValueError):
-        # A lock file we cannot parse is not evidence of a live writer. It is
-        # evidence of a bug or a truncated write, and treating it as live
-        # would make the store permanently unwritable.
-        return False, "unreadable lock file"
-    if pid <= 0:
-        return False, "lock file names pid %s" % pid
-    if not HAVE_PROC:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return False, "no such process"
-        except PermissionError:
-            # Running, owned by someone else. Still a live process.
-            return True, "running"
-        return True, "running"
-    now = _start_time(pid)
-    if now is None:
-        return False, "no such process"
-    recorded = holder.get("start")
-    if recorded is None:
-        # Written by a build without /proc. The pid is alive; we cannot prove
-        # it is the same process, and guessing "stale" here would let a second
-        # writer in. Err toward refusing.
-        return True, "running (start time was not recorded)"
-    if now == recorded:
-        return True, "running"
-    return False, ("pid %d is running but started later than the lock: the "
-                   "number was reused" % pid)
-
-
-def _read(path: str) -> dict[str, Any]:
-    """The lock file as a dict; `{}` when there is nothing usable there.
-
-    It returns `{}` rather than `None` on purpose. With `None`, callers had to
-    write `holder is not None and live`, which put the "is there a live
-    holder" decision in two places -- the None check for a file that will not
-    parse, `_liveness` for one that parses without a pid. A mutation of the
-    second branch survives that, because the first one answers first, and the
-    gate that claims to test unparseable locks tests nothing. One decision, in
-    `_liveness`, and every path reaches it.
-    """
-    try:
-        with open(path, "rb") as fh:
-            loaded = json.loads(fh.read().decode("utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return loaded if isinstance(loaded, dict) else {}
+    def __init__(self, store_path: str) -> None:
+        super().__init__(
+            "this process does not hold the write guard for %s -- take "
+            "StoreLock(...) first; the store is not a thing you write to by "
+            "opening it" % store_path)
 
 
 class StoreLock:
-    """The process guard for one store path.
+    """The session guard for one store path.
 
-    Taken once at startup and held for the process's lifetime -- not around
-    each write. Readers do not take this. `status` and, later, search and the
-    MCP server answer while a writer holds it; WAL exists so they can.
+    Taken once at startup and held until the process ends -- not around each
+    write. Readers never take it: `status`, and later search and MCP, answer
+    while a writer holds it, which is what WAL is for.
     """
 
-    def __init__(self, store_path: str, fingerprint: str | None = None,
-                 on_stale: Callable[[str], None] | None = None) -> None:
+    def __init__(self, store_path: str, fingerprint: str | None = None) -> None:
         self.store_path = str(store_path)
         self.path = self.store_path + ".lock"
         self.fingerprint = fingerprint
-        # Called with a message when an orphan is cleared. Clearing a lock is
-        # a thing the user should be told about, not a thing that happens.
-        self.on_stale = on_stale
-        self.nonce = secrets.token_hex(8)
+        self.fd: int | None = None
         self.held = False
 
     # -- acquisition ------------------------------------------------------
 
     def _payload(self) -> bytes:
-        from datetime import datetime
-        pid = os.getpid()
         return json.dumps({
-            "pid": pid,
-            "start": _start_time(pid) if HAVE_PROC else None,
+            "pid": os.getpid(),
             "created": datetime.now().isoformat(timespec="seconds"),
-            "nonce": self.nonce,
             "fingerprint": self.fingerprint,
             "store": self.store_path,
         }).encode("utf-8")
 
-    def _create(self) -> bool:
+    def read_holder(self) -> dict[str, Any]:
+        """The payload as a dict; `{}` when it is absent or will not parse.
+
+        Only ever read after `flock` has already said someone else holds the
+        guard, so a `{}` here means the holder has not written its payload yet
+        -- a window of one `write` -- and never that the lock is free.
+        """
         try:
-            fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        except FileExistsError:
-            return False
-        try:
-            os.write(fd, self._payload())
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        return True
+            with open(self.path, "rb") as fh:
+                loaded = json.loads(fh.read().decode("utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
 
     def acquire(self) -> "StoreLock":
-        # Two attempts, not a loop: one to take a free lock, one more after
-        # clearing an orphan. An unbounded retry against a live writer is the
-        # queue this module refuses to be.
-        for attempt in (0, 1):
-            if self._create():
-                # Read back. If another process cleared our file as an orphan
-                # and wrote its own, the nonce on disk is not ours and we lost.
-                held = _read(self.path)
-                if held.get("nonce") == self.nonce:
-                    self.held = True
-                    return self
-                raise Locked(self.store_path, held)
-
-            holder = _read(self.path)
-            live, why = _liveness(holder)
-            if live:
-                raise Locked(self.store_path, holder)
-            if attempt == 1:
-                # Cleared once already and it is back: someone is racing us
-                # for it and won. Refuse rather than clear a second time.
-                raise Locked(self.store_path, holder)
-            if self.on_stale is not None:
-                self.on_stale("cleared a stale lock left by pid %s (%s)"
-                              % (holder.get("pid", "?"), why))
-            try:
-                os.unlink(self.path)
-            except FileNotFoundError:
-                pass
-        raise AssertionError("unreachable")
+        # Before the lock, not after: a guard that cannot be exclusive should
+        # never be handed out, and finding that out once the store is open is
+        # finding it out too late.
+        fstype = filesystem_of(self.store_path)
+        if fstype not in LOCAL_FILESYSTEMS and os.environ.get(ALLOW_REMOTE) != "1":
+            raise NotLocal(self.store_path, fstype)
+        fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            # EWOULDBLOCK. Read who has it *before* closing our descriptor:
+            # the payload is the only thing that can name them, and closing
+            # first would be one more moment for it to change.
+            holder = self.read_holder()
+            os.close(fd)
+            raise Locked(self.store_path, holder)
+        self.fd = fd
+        self.held = True
+        _HELD.add(self.store_path)
+        # Payload after winning, never before: a process that writes its name
+        # first and then fails to take the lock has told everyone it holds
+        # something it does not.
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, self._payload())
+        os.fsync(fd)
+        return self
 
     # -- release ----------------------------------------------------------
 
     def release(self) -> None:
-        """Drop the lock, but only if it is still ours.
+        """Drop the guard. The file stays; only the lock on it goes.
 
-        Unlinking unconditionally would delete a lock a later writer took
-        after ours was cleared as an orphan, which turns one stuck run into
-        two concurrent ones.
+        Unlinking here is the bug this design exists to avoid -- see the
+        module docstring. The payload is left as a record of the last holder,
+        which is readable by a person and load-bearing for nobody: it is only
+        ever consulted when `flock` has already refused someone.
         """
         if not self.held:
             return
         self.held = False
-        holder = _read(self.path)
-        if holder.get("nonce") != self.nonce:
-            # Not ours any more: ours was cleared as an orphan and a later
-            # writer took the file. Unlinking here would hand that writer's
-            # store to a third one.
-            return
-        try:
-            os.unlink(self.path)
-        except FileNotFoundError:
-            pass
+        _HELD.discard(self.store_path)
+        if self.fd is not None:
+            fcntl.flock(self.fd, fcntl.LOCK_UN)
+            os.close(self.fd)
+            self.fd = None
 
     def __enter__(self) -> "StoreLock":
         return self.acquire()
 
     def __exit__(self, *exc: object) -> None:
-        # Releases on KeyboardInterrupt too: an interrupted writer must leave
-        # nothing behind, and a lock file is something.
+        # Releases on KeyboardInterrupt too. The kernel would drop the lock at
+        # exit anyway; doing it here is what lets one process take the guard,
+        # hand it back, and take it again without ending.
         self.release()

@@ -21,10 +21,6 @@ from .lock import Locked, StoreLock
 from .store import Store, data_home, db_path, initialise, new_project, projects
 
 
-def _note(msg: str) -> None:
-    print("note: %s" % msg, file=sys.stderr)
-
-
 def _resolve(value: str) -> str:
     """A project id from an id or a path. Refuses ambiguity rather than picking.
 
@@ -56,15 +52,15 @@ def _resolve(value: str) -> str:
 
 
 def _guard(store_db: Path) -> StoreLock:
-    """Take the process guard. Held for the lifetime of this process, not the write.
+    """Take the session guard. Held for the lifetime of this process, not the write.
 
     Acquired here and released in a `finally`, deliberately not with `with`:
-    the guard is per process, so the acquisition and the release are at the
-    two ends of the command, not around one block. `with` on an already-held
-    lock re-acquires it and the process is refused by its own lock file --
-    which is exactly what happened the first time this was written.
+    the guard is per session, so the acquisition and the release are at the
+    two ends of the command, not around one block. Taking it twice in one
+    process is refused by the kernel like any other second holder, which is
+    correct and is also what a `with` around each write would produce.
     """
-    return StoreLock(str(store_db), on_stale=_note).acquire()
+    return StoreLock(str(store_db)).acquire()
 
 
 # -- commands --------------------------------------------------------------
