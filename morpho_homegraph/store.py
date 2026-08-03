@@ -30,7 +30,7 @@ from pathlib import Path
 
 from .lock import Unguarded, holds
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # Two roles, two schemas, and the split is the point. **L0 is shared**: it
 # describes the whole home area, it is identical for every project, and it
@@ -76,6 +76,13 @@ SCHEMA = {
               # row, every rewrite came back as `changed`, and the two-step
               # design was decoration from the day it was written.
               "  content_hash TEXT)"),
+    # CP-3: the scope, per project. The first thing a project store holds
+    # besides `meta`, and the right place for it -- a scope is per project,
+    # while L0 and L1 are shared.
+    "scope": (PROJECT,
+              "CREATE TABLE IF NOT EXISTS scope ("
+              "  path TEXT PRIMARY KEY,"
+              "  mode TEXT NOT NULL)"),
     # L1 (CP-2): what changed between this L0 pass and the previous one.
     # Replaced whole on every scan, like `files` -- a journal that accumulates
     # is one where "the previous pass" has stopped meaning anything.

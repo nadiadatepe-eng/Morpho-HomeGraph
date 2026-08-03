@@ -197,7 +197,7 @@ def gates_store(tree):
         # so a table nobody declared shows up as a failure rather than as
         # nothing.
         check("1b a project store has exactly the tables projects declare",
-              tables == {"meta"}, "tables=%s" % sorted(tables))
+              tables == {"meta", "scope"}, "tables=%s" % sorted(tables))
 
     guard = take(db, "2  migrating twice changes nothing")
     if guard is None:
