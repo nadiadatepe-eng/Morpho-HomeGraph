@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Endringsdeteksjon",
+    "subtitle": "Tre trinn, og bare det siste er dyrt",
+    "output": "endringsdeteksjon.html",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    { "id": "katalog", "label": "L0 Katalog" },
+    { "id": "journal", "label": "L1 Endringsjournal" },
+    { "id": "innhold", "label": "L2 Innhold" },
+    { "id": "unntak", "label": "Det som ikke leses", "variant": "exception" }
+  ],
+  "mainPath": ["scan", "cmp", "hash", "read"],
+  "nodes": [
+    { "id": "scan", "lane": "katalog", "col": 0, "type": "frontend", "label": "Gjennomgang", "sublabel": "stat() på alt", "tag": "0,23 s" },
+    { "id": "cmp", "lane": "journal", "col": 1, "type": "backend", "label": "Sammenlign", "sublabel": "størrelse + mtime" },
+    { "id": "hash", "lane": "journal", "col": 3, "type": "backend", "label": "Hash", "sublabel": "bekrefter bytene" },
+    { "id": "read", "lane": "innhold", "col": 5, "type": "database", "label": "Les innhold", "sublabel": "kode som tekst", "tag": "eneste dyre steg" },
+    { "id": "blind", "lane": "unntak", "col": 1, "type": "security", "label": "Blindflekk", "sublabel": "samme størrelse OG mtime" },
+    { "id": "touched", "lane": "unntak", "col": 3, "type": "security", "label": "touched", "sublabel": "like bytes, ingen reparsing" }
+  ],
+  "edges": [
+    { "id": "scan-cmp", "from": "scan", "to": "cmp", "variant": "emphasis", "route": "drop" },
+    { "id": "cmp-hash", "from": "cmp", "to": "hash", "label": "flagget", "variant": "emphasis" },
+    { "id": "hash-read", "from": "hash", "to": "read", "label": "bekreftet", "variant": "emphasis", "route": "drop" },
+    { "id": "cmp-blind", "from": "cmp", "to": "blind", "label": "aldri flagget", "variant": "security", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "id": "hash-touched", "from": "hash", "to": "touched", "label": "like bytes", "fromSide": "bottom", "toSide": "top", "route": "drop" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Hvorfor tre og ikke to",
+      "items": [
+        "stat() er gratis og dekker alt",
+        "hash koster lesing, men bare på det stat() flagget",
+        "innholdslesing koster mest, og skjer bare i valgt omfang"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Blindflekkene, navngitt",
+      "items": [
+        "Størrelse alene bommer på en dato, et flagg, ett tegn",
+        "mtime alene bommer på cp -p, rsync -a, touch -r, restore",
+        "Samme størrelse OG samme mtime fanges av ingen av dem",
+        "Den resten er sjelden, og skal stå skrevet — ikke utelates"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Lærdommen fra homegraph",
+      "items": [
+        "touched kunne aldri fyre: ingen modell lagret content_hash",
+        "Den lagrede hashen var alltid NULL, alt kom tilbake changed",
+        "Toregtrinnsdesignet var dekorativt fra dagen det ble skrevet",
+        "Porten må bevise at touched faktisk kan inntreffe"
+      ]
+    }
+  ]
+}

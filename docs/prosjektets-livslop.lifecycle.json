@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Et prosjekts livsløp",
+    "subtitle": "Flytting, kopi og sletting avgjort av exists(), ikke av heuristikk",
+    "output": "prosjektets-livslop.html",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    { "id": "main", "label": "Normal gang" },
+    { "id": "hendelser", "label": "Stien endret seg" },
+    { "id": "terminal", "label": "Utfall" }
+  ],
+  "states": [
+    { "id": "valgt", "type": "start", "label": "Valgt", "lane": "main", "col": 0, "step": "01", "tag": "brukeren peker" },
+    { "id": "indeksert", "type": "active", "label": "Indeksert", "lane": "main", "col": 1, "step": "02", "tag": "id er generert" },
+    { "id": "sjekk", "type": "decision", "label": "exists()", "lane": "main", "col": 2, "step": "03", "tag": "begge stier" },
+    { "id": "kopi", "type": "waiting", "label": "Kopi", "lane": "hendelser", "col": 0, "tag": "begge finnes" },
+    { "id": "flyttet", "type": "waiting", "label": "Flyttet", "lane": "hendelser", "col": 1, "tag": "kun ny finnes" },
+    { "id": "snapshot", "type": "waiting", "label": "Kun i snapshot", "lane": "hendelser", "col": 2, "tag": "ingen finnes" },
+    { "id": "beholdt", "type": "success", "label": "Begge beholdt", "lane": "terminal", "col": 0 },
+    { "id": "fulgt", "type": "success", "label": "Indeksen fulgte", "lane": "terminal", "col": 1 },
+    { "id": "utlopt", "type": "failure", "label": "Utløpt", "lane": "terminal", "col": 2, "tag": "vinduet lukket" }
+  ],
+  "transitions": [
+    { "id": "t-valgt", "from": "valgt", "to": "indeksert", "variant": "emphasis" },
+    { "id": "t-indeksert", "from": "indeksert", "to": "sjekk", "variant": "emphasis" },
+    { "id": "t-kopi", "from": "sjekk", "to": "kopi" },
+    { "id": "t-flyttet", "from": "sjekk", "to": "flyttet", "variant": "emphasis" },
+    { "id": "t-slettet", "from": "sjekk", "to": "snapshot", "variant": "security" },
+    { "id": "t-beholdt", "from": "kopi", "to": "beholdt" },
+    { "id": "t-fulgt", "from": "flyttet", "to": "fulgt", "variant": "emphasis" },
+    { "id": "t-utlopt", "from": "snapshot", "to": "utlopt", "label": "varsel, så utløp", "variant": "security" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Regelen er mekanisk avgjørbar",
+      "items": [
+        "Begge stier finnes → kopi, begge beholdes som egne prosjekter",
+        "Kun ny sti finnes → flytting, den gamle nektes framfor å slettes",
+        "Ingen sti finnes → ut av levende lager, lever kun i snapshot",
+        "Ingen konfidens å lese, ingen gjetning å stole på"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Hvorfor identiteten ikke er stien",
+      "items": [
+        "Node-identitet = innholdshash, stien er en egenskap",
+        "Prosjekt-id er generert, registeret holder id → sti",
+        "morphofiles-v2 utledet id-en AV stien, så en flytting lagde nytt prosjekt",
+        "Tvetydighet nektes: to identiske trær har samme fingeravtrykk"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Oppbevaringsvinduet svikter stille på to måter",
+      "items": [
+        "Hendelsesdrevne snapshots gjør siste 5 til fem minutter, så ta dem periodisk",
+        "En regel uten produksjonskaller ser identisk ut med en som virker",
+        "homegraphs apply_retention ble kun kalt fra tester, og tabellen vokste uten grense",
+        "Varsle før siste snapshot faller ut, ellers leses tapet som at det aldri fantes"
+      ]
+    }
+  ]
+}
