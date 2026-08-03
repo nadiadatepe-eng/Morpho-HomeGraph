@@ -1,0 +1,7 @@
+root            /home/nadi
+cache           cold
+entries         729343  (dir 74694, file 628552, link 26050, other 47)
+unreadable dirs 0
+time            7.51 s  ->  97108 entries/s
+peak rss        113 MB  (counting only, nothing stored)
+find            729343 entries in 1.12 s  (difference +0) -- warm, the walk above filled the cache
