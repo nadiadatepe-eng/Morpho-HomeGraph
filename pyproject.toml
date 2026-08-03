@@ -1,0 +1,19 @@
+[project]
+name = "morpho-homegraph"
+version = "0.1.0"
+description = "Morpho-HomeGraph: metadata over everything, content where you point"
+requires-python = ">=3.12"
+# Zero runtime dependencies on the Python side, on purpose. The one dependency
+# in the project is `@xenova/transformers` on the npm side (locked decision 9),
+# and it arrives in CP-9, not here.
+dependencies = []
+
+[project.scripts]
+morphofiles-graph = "morpho_homegraph.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["morpho_homegraph*"]
