@@ -30,7 +30,7 @@ from pathlib import Path
 
 from .lock import Unguarded, holds
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 # Two roles, two schemas, and the split is the point. **L0 is shared**: it
 # describes the whole home area, it is identical for every project, and it
@@ -90,6 +90,25 @@ SCHEMA = {
                 "CREATE TABLE IF NOT EXISTS journal ("
                 "  path TEXT PRIMARY KEY,"
                 "  state TEXT NOT NULL)"),
+    # L2 (CP-4): the content of what the scope selected. Per *project*, not
+    # shared: L0 and L1 describe the home area and are the same for everyone,
+    # while content exists only for one scope. Two projects over the same disk
+    # have different L2, and the shared store has no business holding either.
+    #
+    # Every path in `L0 ∩ scope ∩ kind=file` gets a row, including the ones
+    # that could not be read -- those carry a `reason` and no `text`. Without
+    # that, "not read" and "does not exist" are the same absence, and telling
+    # them apart is what this layer is for. `reason IS NULL` iff
+    # `text IS NOT NULL`; `tests/test_cp4.py` gate 2 checks the XOR rather
+    # than trusting the writer.
+    "content": (PROJECT,
+                "CREATE TABLE IF NOT EXISTS content ("
+                "  path TEXT PRIMARY KEY,"
+                "  size INTEGER NOT NULL,"
+                "  mtime_ns INTEGER NOT NULL,"
+                "  sha256 TEXT,"
+                "  text TEXT,"
+                "  reason TEXT)"),
 }
 
 # Milliseconds a reader or writer waits on a locked SQLite page before giving

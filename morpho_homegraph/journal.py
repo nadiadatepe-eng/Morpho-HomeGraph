@@ -36,12 +36,28 @@ ADDED, REMOVED, UNCHANGED, CHANGED, TOUCHED, UNCONFIRMED = (
 BLOCK = 1 << 20
 
 
+def hash_bytes(raw: bytes) -> str:
+    """sha256 of bytes already in hand.
+
+    Here so CP-4 can hash what it just read instead of reading the file a
+    second time, and so both layers share one definition of "the hash of this
+    content" -- two implementations of the same digest is two things that can
+    drift, and the drift would look like a changed file.
+    """
+    return hashlib.sha256(raw).hexdigest()
+
+
 def content_hash(path: str) -> str | None:
     """sha256 of `path`, or None when it cannot be read.
 
     None is not an error state to propagate as "changed": a file we could not
     open is a file we know nothing new about, and the caller reports it as
     unconfirmed for exactly the same reason it does outside the scope.
+
+    Block-wise rather than `hash_bytes(Path(path).read_bytes())`: a 200 MB file
+    in the scope should not decide the memory ceiling of the pass that hashes
+    it. CP-4 has a 1 MiB cap and can afford the whole-file form; this one has
+    no cap.
     """
     digest = hashlib.sha256()
     try:
