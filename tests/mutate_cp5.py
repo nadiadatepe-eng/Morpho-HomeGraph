@@ -49,9 +49,10 @@ MUTATIONS = [
 
     ("a resolved-by-name link is recorded as stated",
      "morpho_homegraph/graph.py",
-     "                         method=MD_WIKILINK_UNIQUE,\n"
+     "                    edge(db, sha, target, method=method,\n"
      "                         confidence=DERIVED_CONFIDENCE)",
-     "                         method=MD_WIKILINK_PATH,  # mutated\n"
+     "                    edge(db, sha, target, method=MD_WIKILINK_PATH,"
+     "  # mutated\n"
      "                         confidence=1.0)",
      "8b a.md's own answer is partial -- its one edge is derived"),
 
@@ -111,16 +112,48 @@ MUTATIONS = [
      "        \"SELECT path, sha256, text FROM content\"  # mutated",
      "3  a file L2 could not read has no node"),
 
+    # -- R9: narrowing by the linker's own suffix --------------------------
+    #
+    # Without it the layer produced zero edges on ~/.claude/memory, where 150
+    # `.md` and 150 `.embedding` share all 150 stems. With a version that
+    # prefers `.md` instead of *the source's* suffix, gate 17 still passes --
+    # which is what gate 18 is for.
+    ("an ambiguous stem is refused instead of narrowed",
+     "morpho_homegraph/graph.py",
+     "    same = [sha for sha, suffix in candidates if suffix == source_suffix]\n"
+     "    if len(same) == 1:\n"
+     "        return same[0], MD_WIKILINK_SAME_EXT",
+     "    return None, None  # mutated: no narrowing at all",
+     "17 an ambiguous stem resolves to the linker's own suffix"),
+
+    ("narrowing prefers .md rather than the linking file's own suffix",
+     "morpho_homegraph/graph.py",
+     "    same = [sha for sha, suffix in candidates if suffix == source_suffix]",
+     "    same = [sha for sha, suffix in candidates if suffix == \".md\"]"
+     "  # mutated",
+     "18 the same rule sends an .embedding link to the .embedding"),
+
+    ("narrowing picks a winner instead of refusing what is left",
+     "morpho_homegraph/graph.py",
+     "    if len(same) == 1:\n"
+     "        return same[0], MD_WIKILINK_SAME_EXT",
+     "    if same:  # mutated: first of whatever is left\n"
+     "        return sorted(same)[0], MD_WIKILINK_SAME_EXT",
+     "19 narrowing without uniqueness is still refused"),
+
+    ("a narrowed edge is recorded as if the name had been unique",
+     "morpho_homegraph/graph.py",
+     "        return same[0], MD_WIKILINK_SAME_EXT",
+     "        return same[0], MD_WIKILINK_UNIQUE  # mutated",
+     "20 the narrowed edge names its own method"),
+
     # -- ambiguity is refused, not resolved --------------------------------
     ("an ambiguous name picks a winner",
      "morpho_homegraph/graph.py",
-     "                elif len(candidates) > 1:\n"
-     "                    tally[\"ambiguous\"] += 1",
-     "                elif len(candidates) > 1:\n"
-     "                    edge(db, sha, sorted(candidates)[0],  # mutated\n"
-     "                         method=MD_WIKILINK_UNIQUE,\n"
-     "                         confidence=DERIVED_CONFIDENCE)\n"
-     "                    tally[\"ambiguous\"] += 1",
+     "    candidates = by_name.get(raw, set())\n"
+     "    if len(candidates) == 1:",
+     "    candidates = by_name.get(raw, set())\n"
+     "    if candidates:  # mutated: any candidate will do",
      "9  an ambiguous [[name]] produces no edge, and is counted"),
 
     # -- the layer is replaced, and it belongs to a project ----------------

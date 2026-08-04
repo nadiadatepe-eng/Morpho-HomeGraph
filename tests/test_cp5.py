@@ -77,6 +77,30 @@ def build_tree(root):
     write(os.path.join(root, "one", "dup.md"), "first\n")
     write(os.path.join(root, "two", "dup.md"), "second\n")
     made["asks"] = write(os.path.join(root, "asks.md"), "which [[dup]]?\n")
+    # R9: a stem shared by two *different* suffixes. `~/.claude/memory` is
+    # 150 of these, and before the rule existed every wikilink in it was
+    # ambiguous and the layer produced no edges at all.
+    made["side_md"] = write(os.path.join(root, "side.md"), "the markdown one\n")
+    made["side_emb"] = write(os.path.join(root, "side.embedding"),
+                             "the sidecar one\n")
+    # The two linkers must differ in content, or R1 makes them one node and
+    # that node carries *both* edges -- which is correct and is gate 21, but
+    # it is not what gates 17 and 18 are asking about.
+    made["from_md"] = write(os.path.join(root, "from_md.md"),
+                            "from the markdown side: see [[side]]\n")
+    made["from_emb"] = write(os.path.join(root, "from_emb.embedding"),
+                             "from the sidecar side: see [[side]]\n")
+    # Identical text in two differently-suffixed files: one node, and the
+    # suffix rule fires once per *path*, so the node ends up with both edges.
+    made["twin_md"] = write(os.path.join(root, "twin_link.md"),
+                            "both of us say [[side]]\n")
+    made["twin_emb"] = write(os.path.join(root, "twin_link.embedding"),
+                             "both of us say [[side]]\n")
+    # Three files sharing a stem AND a suffix: narrowing cannot make this one
+    # unique, so it stays refused.
+    for n in ("one", "two", "three"):
+        write(os.path.join(root, n, "trip.md"), "trip in %s\n" % n)
+    made["asks3"] = write(os.path.join(root, "asks3.md"), "which [[trip]]?\n")
     # A file that could not be read gets no node.
     made["binary"] = os.path.join(root, "image.bin")
     with open(made["binary"], "wb") as fh:
@@ -265,7 +289,7 @@ def _gates_graph(store, made, root, tally):
           % (one_hop["provenance"], len(one_hop["nodes"])))
 
     check("9  an ambiguous [[name]] produces no edge, and is counted",
-          tally["ambiguous"] == 1
+          tally["ambiguous"] == 2
           and not store.db.execute(
               "SELECT 1 FROM edges WHERE src = ?",
               (sha_of(store, made["asks"]),)).fetchall(),
@@ -289,6 +313,44 @@ def _gates_graph(store, made, root, tally):
     check("11 the same holds two hops out, not only on the edge itself",
           before_two == graph.PROV_PARTIAL and after_two == graph.PROV_COMPLETE,
           "%s -> %s" % (before_two, after_two))
+
+    # -- R9, gates 17-20 -------------------------------------------------
+    md, emb = sha_of(store, made["side_md"]), sha_of(store, made["side_emb"])
+    from_md = graph.neighbours(store, sha_of(store, made["from_md"]), hops=1)
+    from_emb = graph.neighbours(store, sha_of(store, made["from_emb"]), hops=1)
+    check("17 an ambiguous stem resolves to the linker's own suffix",
+          from_md["nodes"] == [md],
+          "a .md link landed on %s"
+          % ("the .md" if from_md["nodes"] == [md] else from_md["nodes"]))
+    # The rule is symmetric. If it merely preferred `.md` it would pass gate 17
+    # and be wrong about every other corpus.
+    check("18 the same rule sends an .embedding link to the .embedding",
+          from_emb["nodes"] == [emb],
+          "an .embedding link landed on %s"
+          % ("the .embedding" if from_emb["nodes"] == [emb] else
+             from_emb["nodes"]))
+    check("19 narrowing without uniqueness is still refused",
+          not store.db.execute(
+              "SELECT 1 FROM edges WHERE src = ?",
+              (sha_of(store, made["asks3"]),)).fetchall(),
+          "three files share stem and suffix, no edge")
+    method_used = store.db.execute(
+        "SELECT method FROM edges WHERE src = ?",
+        (sha_of(store, made["from_md"]),)).fetchone()
+    check("20 the narrowed edge names its own method",
+          method_used and method_used[0] == graph.MD_WIKILINK_SAME_EXT,
+          method_used[0] if method_used else "no edge")
+
+    # 21: R1 meets R9. Identical text in a `.md` and an `.embedding` is one
+    # node, but resolution reads the *path's* suffix -- so the single node
+    # comes out holding both edges. Correct under both rules, surprising to
+    # read, and pinned here so it cannot change without someone deciding to.
+    twin = sha_of(store, made["twin_md"])
+    check("21 one node, two paths, two differently-resolved edges",
+          twin == sha_of(store, made["twin_emb"])
+          and sorted(graph.neighbours(store, twin, hops=1)["nodes"])
+          == sorted([md, emb]),
+          "the shared node links to both the .md and the .embedding")
 
     # 11c: from b the first edge is stated and the derived one is a hop
     # further out. An answer that reads only its first edge calls this

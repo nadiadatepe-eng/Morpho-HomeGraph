@@ -47,8 +47,14 @@ LINK = "link"
 MD_INLINE = "md_inline"           # [text](relative/path.md), resolved exactly
 MD_WIKILINK_PATH = "md_wikilink_path"    # [[dir/name.md]], resolved exactly
 MD_WIKILINK_UNIQUE = "md_wikilink_unique"  # [[name]], one file has that name
+MD_WIKILINK_SAME_EXT = "md_wikilink_same_ext"  # [[name]], narrowed by suffix
 
 STATED = (MD_INLINE, MD_WIKILINK_PATH)
+
+# One number for both derived methods, on purpose. We have not measured which
+# of them is wrong more often, and ranking them with an invented number would
+# be exactly the confidence-dressed-as-fact this layer exists to prevent. The
+# *method* is the distinction, and it is on every row.
 DERIVED_CONFIDENCE = 0.9
 
 # Named `PROV_` because `scope.py` already has a `PARTIAL`, and it means
@@ -122,11 +128,15 @@ def build(store, scope_root: str | None = None) -> dict:
     # Name -> the hashes of every file with that basename. A name resolving to
     # more than one file is refused rather than picked between (locked
     # decision 5), and refusing needs the count, not the first hit.
-    by_name: dict[str, set[str]] = {}
+    # `(hash, suffix)` rather than just the hash: R9 narrows an ambiguous name
+    # by the suffix of the file the link is written in, and that needs the
+    # suffix of each candidate.
+    by_name: dict[str, set[tuple[str, str]]] = {}
     for path, sha, _text in rows:
-        by_name.setdefault(os.path.basename(path), set()).add(sha)
-        by_name.setdefault(os.path.splitext(os.path.basename(path))[0],
-                           set()).add(sha)
+        base = os.path.basename(path)
+        suffix = os.path.splitext(base)[1]
+        by_name.setdefault(base, set()).add((sha, suffix))
+        by_name.setdefault(os.path.splitext(base)[0], set()).add((sha, suffix))
 
     tally = {"edges": 0, "stated": 0, "derived": 0,
              "ambiguous": 0, "outside": 0}
@@ -148,13 +158,13 @@ def build(store, scope_root: str | None = None) -> dict:
                     # node we do not have.
                     tally["outside"] += 1
                     continue
-                candidates = by_name.get(raw, set())
-                if len(candidates) == 1:
-                    edge(db, sha, next(iter(candidates)),
-                         method=MD_WIKILINK_UNIQUE,
+                target, method = _resolve_by_name(
+                    raw, os.path.splitext(path)[1], by_name)
+                if target is not None:
+                    edge(db, sha, target, method=method,
                          confidence=DERIVED_CONFIDENCE)
                     tally["derived"] += 1
-                elif len(candidates) > 1:
+                elif raw in by_name:
                     tally["ambiguous"] += 1
                 else:
                     tally["outside"] += 1
@@ -167,6 +177,29 @@ def build(store, scope_root: str | None = None) -> dict:
     store.set_meta("l3_outside", str(tally["outside"]))
     store.set_meta("l3_seconds", "%.3f" % (time.perf_counter() - started))
     return tally
+
+
+def _resolve_by_name(raw: str, source_suffix: str, by_name) -> tuple:
+    """`(hash, method)` for a bare `[[name]]`, or `(None, None)`.
+
+    **R9, and the reason it is not a heuristic.** Refusing ambiguity means not
+    *guessing* between equal candidates. Narrowing by the suffix of the file
+    the link is written in does not guess: it uses something the source states
+    about itself, and it still refuses when the narrowing leaves more than one.
+    A heuristic would have a winner to fall back on; this has none.
+
+    Measured 2026-08-04, which is why the rule exists at all: `~/.claude/memory`
+    holds 150 `.md` and 150 `.embedding` sharing all 150 stems, so every single
+    `[[name]]` was ambiguous and the layer produced zero edges on a corpus made
+    of wikilinks.
+    """
+    candidates = by_name.get(raw, set())
+    if len(candidates) == 1:
+        return next(iter(candidates))[0], MD_WIKILINK_UNIQUE
+    same = [sha for sha, suffix in candidates if suffix == source_suffix]
+    if len(same) == 1:
+        return same[0], MD_WIKILINK_SAME_EXT
+    return None, None
 
 
 def _resolve_exact(raw: str, here: str, by_path: dict[str, str],
