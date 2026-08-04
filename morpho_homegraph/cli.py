@@ -17,6 +17,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from . import snapshot
 from .lock import Locked, StoreLock
 from .scan import scan
 from .store import (L0, Store, data_home, db_path, initialise, l0_path,
@@ -183,6 +184,40 @@ def cmd_update(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_snapshot(args: argparse.Namespace) -> int:
+    """Writer. Takes one snapshot, then applies the retention window.
+
+    **This is the retention rule's production caller**, and CP-7's answer key
+    makes it a gate: homegraph's `apply_retention()` was documented in three
+    places as the reason a table had a ceiling, and was called from tests only.
+    Every real installation grew without a bound, with every gate green.
+
+    The two guards are different on purpose. Taking the snapshot needs none --
+    it reads, and WAL admits readers. Pruning writes, and its guard is on the
+    snapshot directory rather than the project's store, because the project's
+    store is exactly what may already have been released.
+    """
+    project_id = _resolve(args.project)
+    if not db_path(project_id).is_file():
+        # Same refusal `status` gives: a condition the user fixes with one
+        # command should not arrive as a traceback.
+        raise SystemExit("%s has no index to snapshot: morphofiles-graph "
+                         "update %s" % (args.project, args.project))
+    path = snapshot.take(project_id)
+    barrier = _guard_or_refuse(Path(snapshot.prune_guard(project_id)))
+    if barrier is None:
+        return 2
+    try:
+        removed = snapshot.apply_retention(project_id)
+    finally:
+        barrier.release()
+    print("%s\n%d expired snapshot(s) removed" % (path, len(removed)))
+    for pid, days in snapshot.expiring():
+        print("WARNING  %s lives only in snapshots and falls out of history "
+              "in %.1f days" % (pid, days))
+    return 0
+
+
 # -- entry point -----------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -207,6 +242,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_scan.add_argument("root", nargs="?", default="~",
                         help="what to catalogue (default: the home area)")
     p_scan.set_defaults(func=cmd_scan)
+
+    p_snap = sub.add_parser("snapshot",
+                            help="snapshot a project and prune the window")
+    p_snap.add_argument("project", help="project id or path")
+    p_snap.set_defaults(func=cmd_snapshot)
     return parser
 
 
