@@ -162,6 +162,34 @@ def gates_gitignore(work):
                                           "ci.yml")),
           "%d rules" % len(scope.rules))
 
+    # R6c: the patterns work *through* the predicate, not beside it. Before
+    # 2026-08-04 `from_repo` handed them back separately and CP-4 dropped them,
+    # which left `gitignored()` with no caller outside this file.
+    write(os.path.join(repo, "run.log"), "noise\n")
+    write(os.path.join(repo, "keep.log"), "wanted\n")
+    write(os.path.join(repo, ".venv", "lib", "x.py"), "import os\n")
+    with open(os.path.join(repo, ".gitignore"), "w") as fh:
+        fh.write("*.log\n!keep.log\n.venv/\n")
+    scope, patterns = from_repo(repo)
+    check("18 an ignored file is outside the scope, not merely matched",
+          not scope.contains(os.path.join(repo, "run.log"))
+          and scope.contains(os.path.join(repo, "src", "main.py")),
+          "%d patterns through contains()" % len(patterns))
+
+    # Git never asks this: it does not descend into an ignored directory, so
+    # it is never handed the children. A per-path predicate is, and without
+    # walking the parents `.venv/` excludes one directory and none of its 304
+    # files -- measured on ~/homegraph.
+    check("19 a file under an ignored directory is outside too",
+          not scope.contains(os.path.join(repo, ".venv", "lib", "x.py"))
+          and not scope.contains(os.path.join(repo, ".venv"), is_dir=True),
+          ".venv/lib/x.py excluded by .venv/")
+
+    check("20 negation survives the predicate",
+          scope.contains(os.path.join(repo, "keep.log"))
+          and not scope.contains(os.path.join(repo, "run.log")),
+          "!keep.log wins over *.log")
+
     bare = os.path.join(work, "bare-repo")
     write(os.path.join(bare, ".git", "HEAD"), "ref: refs/heads/main\n")
     write(os.path.join(bare, "only.py"))
@@ -218,6 +246,42 @@ def gates_storage(work):
           and back.contains(outside) == scope.contains(outside) is False
           and sorted(back.rules) == sorted(scope.rules),
           "%d rules round-tripped" % len(back.rules))
+
+    # 21, R6d: `.gitignore` is re-read, never frozen into the store. A saved
+    # scope has to give the *current* answer -- an index answering by a rule
+    # the file no longer has is worse than one without the rule.
+    repo21 = os.path.join(os.path.dirname(folder), "repo21")
+    write(os.path.join(repo21, ".git", "HEAD"), "ref: refs/heads/main\n")
+    write(os.path.join(repo21, "a.log"), "x\n")
+    with open(os.path.join(repo21, ".gitignore"), "w") as fh:
+        fh.write("*.log\n")
+    repo_scope, _ = from_repo(repo21)
+    project21, db21 = new_project()
+    guard21 = StoreLock(str(db21)).acquire()
+    try:
+        with Store(db21, role=PROJECT) as store:
+            initialise(store, project21, repo21)
+            save(store, repo_scope)
+            was_ignored = not load(store).contains(os.path.join(repo21,
+                                                               "a.log"))
+            # The user edits the file. Nothing in the store changes.
+            with open(os.path.join(repo21, ".gitignore"), "w") as fh:
+                fh.write("# nothing ignored any more\n")
+            now_included = load(store).contains(os.path.join(repo21, "a.log"))
+    finally:
+        guard21.release()
+    check("21 a saved scope re-reads .gitignore instead of freezing it",
+          was_ignored and now_included,
+          "ignored before the edit: %s, included after: %s"
+          % (was_ignored, now_included))
+
+    # 22: a plain folder has no root and no patterns, so R6c changes nothing
+    # for it. Without this, the whole feature could be gated only on repos.
+    plain = Scope().add(folder, INCLUDE)
+    check("22 a folder scope is unaffected by the pattern machinery",
+          plain.contains(inside) and plain.patterns == []
+          and plain.root is None,
+          "no root, no patterns")
 
     # A second save with the rule reversed. One save can never show whether
     # the old rules were cleared, and a scope that accumulates keeps a rule

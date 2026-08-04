@@ -108,7 +108,7 @@ MUTATIONS = [
 
     ("the scope is not consulted, everything in L0 is read",
      "morpho_homegraph/content.py",
-     "        if scope.contains(path)]",
+     "        if scope.contains(path, is_dir=False)]",
      "        if True]  # mutated",
      "9  a file outside the scope gets no row at all"),
 

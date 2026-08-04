@@ -53,11 +53,21 @@ def _under(path: str, root: str) -> bool:
 class Scope:
     """The rules for one project, and the answers derived from them."""
 
-    def __init__(self, rules: list[tuple[str, str]] | None = None) -> None:
+    def __init__(self, rules: list[tuple[str, str]] | None = None,
+                 patterns: list[tuple[str, bool, bool, bool]] | None = None,
+                 root: str | None = None) -> None:
         # (path, mode) in no particular order: the decision sorts by depth,
         # so the caller never has to keep them ordered and cannot break the
         # rule by adding one in the wrong place.
         self.rules: list[tuple[str, str]] = list(rules or [])
+        # The repo's `.gitignore`, held *inside* the predicate rather than
+        # beside it. `from_repo` used to return `(scope, patterns)` and CP-4
+        # passed only the scope on, which left `gitignored()` with no caller
+        # outside `tests/` and 550 rows in L2 that the repo's own ignore file
+        # excludes. A predicate with an attachment is two predicates, and one
+        # of them gets forgotten.
+        self.patterns = list(patterns or [])
+        self.root = root
 
     def add(self, path: str, mode: str = INCLUDE) -> "Scope":
         resolved = str(Path(path).expanduser().resolve())
@@ -76,9 +86,25 @@ class Scope:
                     best = (rule_path, mode)
         return best
 
-    def contains(self, path: str) -> bool:
-        rule = self.decides(str(path))
-        return rule is not None and rule[1] == INCLUDE
+    def contains(self, path: str, is_dir: bool | None = None) -> bool:
+        """Is `path` in scope -- by the rules **and** by `.gitignore`?
+
+        `is_dir` is passed in where the caller already knows it (L0 stores the
+        kind), and looked up otherwise. It matters because a `logs/` pattern
+        excludes the directory and not a file of the same name.
+        """
+        path = str(path)
+        rule = self.decides(path)
+        if rule is None or rule[1] != INCLUDE:
+            return False
+        if not (self.patterns and self.root):
+            return True
+        if not _under(path, self.root):
+            return True
+        relative = os.path.relpath(path, self.root)
+        if is_dir is None:
+            is_dir = os.path.isdir(path)
+        return not ignored_with_parents(relative, is_dir, self.patterns)
 
     # -- the tree's third state -------------------------------------------
 
@@ -148,6 +174,23 @@ def gitignored(relative: str, is_dir: bool,
     return verdict
 
 
+def ignored_with_parents(relative: str, is_dir: bool, patterns) -> bool:
+    """Is `relative`, or any directory above it, ignored?
+
+    **Git never asks this, and that is the point.** It does not descend into an
+    ignored directory, so it is never handed the children -- the question does
+    not come up. A predicate answering per path does get handed them, and
+    without walking the parents, `.venv/` in a `.gitignore` excludes exactly
+    one directory and none of the 304 files under it. Measured on ~/homegraph
+    2026-08-04, that was most of what CP-4 still called `binary`.
+    """
+    parts = relative.split("/")
+    for depth in range(1, len(parts)):
+        if gitignored("/".join(parts[:depth]), True, patterns):
+            return True
+    return gitignored(relative, is_dir, patterns)
+
+
 def _suffixes(relative: str) -> list[str]:
     parts = relative.split("/")
     return ["/".join(parts[i:]) for i in range(len(parts))]
@@ -185,14 +228,27 @@ def from_repo(root: str) -> tuple[Scope, list[tuple[str, bool, bool, bool]]]:
     was the accident, not the rule.
     """
     root = str(Path(root).expanduser().resolve())
-    scope = Scope().add(root, INCLUDE).add(os.path.join(root, ".git"), EXCLUDE)
-    path = os.path.join(root, ".gitignore")
-    try:
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            patterns = parse_gitignore(fh.read())
-    except OSError:
-        patterns = []
+    patterns = read_gitignore(root)
+    scope = Scope(patterns=patterns, root=root)
+    scope.add(root, INCLUDE).add(os.path.join(root, ".git"), EXCLUDE)
     return scope, patterns
+
+
+def read_gitignore(root: str) -> list[tuple[str, bool, bool, bool]]:
+    """The repo root's `.gitignore`, or an empty list when there is none.
+
+    Read every time rather than stored: a scope loaded from the store has to
+    give the same answer as one built from disk, and freezing the patterns
+    would make a saved scope untrue the moment the user edits the file. An
+    index answering by a rule the file no longer has is worse than one without
+    the rule.
+    """
+    try:
+        with open(os.path.join(root, ".gitignore"),
+                  encoding="utf-8", errors="replace") as fh:
+            return parse_gitignore(fh.read())
+    except OSError:
+        return []
 
 
 def from_folder(root: str) -> Scope:
@@ -219,13 +275,21 @@ def is_repo(root: str) -> bool:
 # -- storage ---------------------------------------------------------------
 
 def save(store, scope: Scope) -> None:
+    """Persist the rules, and the repo root -- but never the patterns.
+
+    The root is what `load` needs in order to find `.gitignore` again. The
+    patterns themselves are re-read every time; see `read_gitignore`.
+    """
     with store.writing() as db:
         db.execute("DELETE FROM scope")
         db.executemany("INSERT INTO scope (path, mode) VALUES (?, ?)",
                        scope.rules)
         db.commit()
+    store.set_meta("scope_repo_root", scope.root or "")
 
 
 def load(store) -> Scope:
+    root = store.get_meta("scope_repo_root") or None
     return Scope([(r[0], r[1]) for r in store.db.execute(
-        "SELECT path, mode FROM scope")])
+        "SELECT path, mode FROM scope")],
+        patterns=read_gitignore(root) if root else None, root=root)

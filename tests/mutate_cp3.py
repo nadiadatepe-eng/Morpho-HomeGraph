@@ -23,8 +23,8 @@ MUTATIONS = [
     # layer *bigger* is the kind nothing else notices.
     ("a repo's own .git stays in the scope",
      "morpho_homegraph/scope.py",
-     "    scope = Scope().add(root, INCLUDE).add(os.path.join(root, \".git\"), EXCLUDE)",
-     "    scope = Scope().add(root, INCLUDE)  # mutated",
+     "    scope.add(root, INCLUDE).add(os.path.join(root, \".git\"), EXCLUDE)",
+     "    scope.add(root, INCLUDE)  # mutated",
      "17 .git is pruned in a repo, .github is not"),
 
     # The prefix trap, in the scope this time: `.github` starts with `.git`,
@@ -36,6 +36,42 @@ MUTATIONS = [
      "    return path.startswith(root)  # mutated",
      "17 .git is pruned in a repo, .github is not"),
 
+    # -- the patterns work through the predicate, not beside it (R6c) -----
+    #
+    # This is the shape the seam had until 2026-08-04: the matcher exists, the
+    # tests exercise it, and nothing in production calls it. The suite stays
+    # green and L2 grows by 550 rows.
+    ("contains() ignores the patterns, as it did before the seam was wired",
+     "morpho_homegraph/scope.py",
+     "        if not (self.patterns and self.root):\n"
+     "            return True",
+     "        if True:  # mutated\n"
+     "            return True",
+     "18 an ignored file is outside the scope, not merely matched"),
+
+    ("only the path itself is tested, never its parent directories",
+     "morpho_homegraph/scope.py",
+     "    parts = relative.split(\"/\")\n"
+     "    for depth in range(1, len(parts)):\n"
+     "        if gitignored(\"/\".join(parts[:depth]), True, patterns):\n"
+     "            return True\n"
+     "    return gitignored(relative, is_dir, patterns)",
+     "    return gitignored(relative, is_dir, patterns)  # mutated",
+     "19 a file under an ignored directory is outside too"),
+
+    ("the parent walk reports directories as files",
+     "morpho_homegraph/scope.py",
+     "        if gitignored(\"/\".join(parts[:depth]), True, patterns):",
+     "        if gitignored(\"/\".join(parts[:depth]), False, patterns):"
+     "  # mutated",
+     "19 a file under an ignored directory is outside too"),
+
+    ("the patterns are frozen into the store instead of re-read",
+     "morpho_homegraph/scope.py",
+     "    root = store.get_meta(\"scope_repo_root\") or None",
+     "    root = None  # mutated: the saved scope forgets its repo",
+     "21 a saved scope re-reads .gitignore instead of freezing it"),
+
     # -- the innermost rule wins, in both directions ----------------------
     ("the outermost rule wins instead of the innermost",
      "morpho_homegraph/scope.py",
@@ -45,9 +81,11 @@ MUTATIONS = [
 
     ("the rule only subtracts, it never adds back",
      "morpho_homegraph/scope.py",
-     "        return rule is not None and rule[1] == INCLUDE",
-     "        return not any(m == EXCLUDE for _p, m in self.rules  # mutated\n"
-     "                       if _under(str(path), _p))",
+     "        if rule is None or rule[1] != INCLUDE:\n"
+     "            return False",
+     "        if any(m == EXCLUDE for _p, m in self.rules  # mutated\n"
+     "               if _under(path, _p)):\n"
+     "            return False",
      "3  an included folder inside an excluded one wins"),
 
     ("a rule matches on string prefix, not at a separator",
@@ -59,15 +97,17 @@ MUTATIONS = [
     # -- the two useless answers ------------------------------------------
     ("everything is in scope",
      "morpho_homegraph/scope.py",
-     "        rule = self.decides(str(path))\n"
-     "        return rule is not None and rule[1] == INCLUDE",
+     "        rule = self.decides(path)\n"
+     "        if rule is None or rule[1] != INCLUDE:\n"
+     "            return False",
      "        return True  # mutated: yes to everything",
      "2  an excluded subfolder loses, the rest of the outer keeps"),
 
     ("nothing is in scope",
      "morpho_homegraph/scope.py",
-     "        rule = self.decides(str(path))\n"
-     "        return rule is not None and rule[1] == INCLUDE",
+     "        rule = self.decides(path)\n"
+     "        if rule is None or rule[1] != INCLUDE:\n"
+     "            return False",
      "        return False  # mutated: no to everything",
      "1  an included folder puts its files in scope"),
 
@@ -166,9 +206,9 @@ MUTATIONS = [
     ("a repo with no .gitignore gets one from somewhere",
      "morpho_homegraph/scope.py",
      "    except OSError:\n"
-     "        patterns = []",
+     "        return []",
      "    except OSError:\n"
-     '        patterns = parse_gitignore("*\\n")  # mutated: skip everything',
+     '        return parse_gitignore("*\\n")  # mutated: skip everything',
      "13b a repo with no .gitignore is a scope with no skip list"),
 ]
 

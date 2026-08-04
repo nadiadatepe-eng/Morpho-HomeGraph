@@ -109,11 +109,14 @@ def build(store, l0_store, scope) -> dict[str, int]:
     # Only `kind == "file"`. Directories, links and the rest have no content,
     # and they are not "unread" either -- they were never candidates, and
     # counting them would move the number gate 15 reads.
+    # `is_dir=False` is passed rather than looked up: every row here is
+    # `kind = 'file'` by the query above, and letting `contains` stat each one
+    # would be a syscall per candidate to re-learn what L0 already recorded.
     candidates = [
         (path, size, mtime_ns)
         for path, size, mtime_ns in l0_store.db.execute(
             "SELECT path, size, mtime_ns FROM files WHERE kind = 'file'")
-        if scope.contains(path)]
+        if scope.contains(path, is_dir=False)]
 
     with store.writing() as db:
         db.execute("DELETE FROM content")
