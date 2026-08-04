@@ -49,11 +49,17 @@ MUTATIONS = [
 
     ("the store file is created before the barrier",
      "morpho_homegraph/cli.py",
-     "    store_db = db_path(_resolve(args.project))\n"
-     "    barrier = _guard_or_refuse(store_db)",
-     "    store_db = db_path(_resolve(args.project))\n"
+     "    barrier = _guard_or_refuse(store_db)\n"
+     "    if barrier is None:\n"
+     "        return 2\n"
+     "    try:\n"
+     "        with Store(store_db) as store:",
      "    import sqlite3; sqlite3.connect(store_db).close()  # mutated\n"
-     "    barrier = _guard_or_refuse(store_db)",
+     "    barrier = _guard_or_refuse(store_db)\n"
+     "    if barrier is None:\n"
+     "        return 2\n"
+     "    try:\n"
+     "        with Store(store_db) as store:",
      "8b a refused writer creates no store"),
 
     # -- the refusal has to be a fact the caller can act on --------------

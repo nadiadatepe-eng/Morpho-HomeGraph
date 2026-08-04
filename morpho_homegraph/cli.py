@@ -17,9 +17,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import snapshot
+from . import content, graph, identity, scope, snapshot
 from .lock import Locked, StoreLock
-from .scan import scan
+from .scan import knows, scan
 from .store import (L0, Store, data_home, db_path, initialise, l0_path,
                     new_project, projects)
 
@@ -119,6 +119,29 @@ def cmd_status(args: argparse.Namespace) -> int:
                 ("busy_timeout", "%s ms" % store.busy_timeout),
                 ("last update", store.get_meta("last_update") or "never")):
             print("%-14s %s" % (label, value))
+        # The layers, counted from the tables rather than from `meta`: a
+        # number written at build time and never checked against the rows is
+        # how an index that lost its content goes on reporting it.
+        #
+        # **This is the line that would have shown the defect.** The project
+        # layers were empty for five checkpoints, and nothing in this output
+        # said so -- id, path, schema and a timestamp are all true of a store
+        # holding nothing at all. An empty index must not be able to look
+        # finished (CP-7B R8).
+        rules, rows, edges = store.db.execute(
+            "SELECT (SELECT COUNT(*) FROM scope),"
+            "       (SELECT COUNT(*) FROM content),"
+            "       (SELECT COUNT(*) FROM edges)").fetchone()
+        print("%-14s %d rules" % ("scope", rules))
+        print("%-14s %d rows (%s unread, %s s)"
+              % ("l2", rows, store.get_meta("l2_unread") or "?",
+                 store.get_meta("l2_seconds") or "?"))
+        print("%-14s %d edges (%s ambiguous, %s outside)"
+              % ("l3", edges, store.get_meta("l3_ambiguous") or "?",
+                 store.get_meta("l3_outside") or "?"))
+        if not rows:
+            print("%-14s not built: morphofiles-graph update %s"
+                  % ("", args.project))
     return 0
 
 
@@ -168,19 +191,100 @@ def cmd_scan(args: argparse.Namespace) -> int:
     return 0
 
 
+def _chosen_scope(root: str):
+    """The scope this folder gets: `.gitignore` for a repo, JUNK otherwise.
+
+    Recomputed on every update and never loaded from the store. A saved scope
+    that is reused is CP-3's bug in new clothing -- patterns worked out and
+    never applied -- because `.gitignore` gets edited and a folder becomes a
+    repo (CP-7B R6).
+    """
+    if scope.is_repo(root):
+        chosen, _patterns = scope.from_repo(root)
+        return chosen
+    return scope.from_folder(root)
+
+
 def cmd_update(args: argparse.Namespace) -> int:
-    """Writer. Nothing to scan until CP-1; the barrier is what CP-0 builds."""
-    store_db = db_path(_resolve(args.project))
+    """Writer. Builds this project's own layers: scope, then L2, then L3.
+
+    **The order is not taste (R1).** `graph.build` reads `content`, so a graph
+    built first finds nothing to link, writes zero edges and *succeeds* -- and
+    "no links in this project" and "the graph ran too early" are then the same
+    output.
+
+    **L0 is read, never built here (R2).** It is a different store with its own
+    guard and its own command. Taking that guard as well would let a project
+    update block every catalogue refresh, and the two writers locked decision
+    12 rests on would have become one.
+
+    Every refusal below exits 2 and names the command that fixes it: an index
+    that is empty for a reason nobody can see is this checkpoint's whole
+    subject.
+    """
+    project_id = _resolve(args.project)
+    store_db = db_path(project_id)
+    # The guard before anything else, including before the store is opened:
+    # CP-0 gate 8b requires that a *refused* writer leaves no store behind, and
+    # opening one is already a write. It also puts every check below inside the
+    # same guard as the writes they decide on.
     barrier = _guard_or_refuse(store_db)
     if barrier is None:
         return 2
     try:
         with Store(store_db) as store:
+            # CP-0's recovery path, and it must stay reachable: a project whose
+            # `index.db` was deleted is recreated by this command -- `status`
+            # says so in as many words. The path it was for lived in the file
+            # that is gone, so the layers cannot be rebuilt from here, and
+            # saying that is the whole of what this branch does.
+            root = store.get_meta("project_path")
+            if not root:
+                store.set_meta("last_update",
+                               datetime.now().isoformat(timespec="seconds"))
+                print("%s  index recreated, but it has no recorded path: "
+                      "morphofiles-graph add <dir> to register it again"
+                      % project_id)
+                return 0
+            if (store.get_meta("state") or identity.LIVING) != identity.LIVING:
+                print("REFUSED  %s is marked deleted and is waiting to be "
+                      "retired -- restore it first (see snapshot.restore)"
+                      % project_id, file=sys.stderr)
+                return 2
+            if not l0_path().is_file():
+                print("REFUSED  the catalogue has not been built: "
+                      "morphofiles-graph scan", file=sys.stderr)
+                return 2
+
+            with Store(l0_path(), read_only=True, role=L0) as l0:
+                try:
+                    # R4: the old location is refused with where it went, not
+                    # quietly rebuilt somewhere else. Applying the move is
+                    # deliberately a different act -- CP-6 refuses to choose
+                    # between two identical trees, and this command would be
+                    # choosing for the user.
+                    root = identity.open_project(project_id, l0)
+                except identity.Moved as exc:
+                    print("REFUSED  %s" % exc, file=sys.stderr)
+                    return 2
+                if not knows(l0, root):
+                    print("REFUSED  the catalogue has never seen %s -- it is "
+                          "older than this project: morphofiles-graph scan"
+                          % root, file=sys.stderr)
+                    return 2
+                chosen = _chosen_scope(root)
+                scope.save(store, chosen)
+                l2 = content.build(store, l0, chosen)
+                l3 = graph.build(store, scope_root=root)
             store.set_meta("last_update",
                            datetime.now().isoformat(timespec="seconds"))
     finally:
         barrier.release()
-    print("updated %s" % store_db.parent.name)
+
+    print("%s  %s\nL2  %d read, %d unread\nL3  %d edges (%d ambiguous, "
+          "%d outside)"
+          % (project_id, root, l2["read"], l2["unread"], l3["edges"],
+             l3["ambiguous"], l3["outside"]))
     return 0
 
 

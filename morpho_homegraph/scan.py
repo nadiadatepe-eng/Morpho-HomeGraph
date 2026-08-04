@@ -219,3 +219,22 @@ def scan(store, root: str | Path,
     return {"count": counted["kept"], "seconds": elapsed,
             "unreadable": counted["unreadable"], "pruned": counted["pruned"],
             "journal": tally}
+
+
+def knows(l0_store, root: str) -> bool:
+    """Has this catalogue ever seen `root`? (CP-7B R3.)
+
+    A project whose tree L0 has never walked would get an empty L2 -- and an
+    empty L2 reads exactly like a project with nothing in scope. The two are
+    told apart here rather than left to the caller to notice, because only one
+    of them is a fact about the user's files.
+
+    The root's own row is enough: `scan` records directories as well as files,
+    so a catalogued empty folder answers yes and is allowed to produce zero
+    content rows. Asking for a *file* under the root would refuse it, which is
+    the same wrong answer one step further along.
+    """
+    root = str(Path(root).expanduser().resolve()).rstrip(os.sep)
+    return bool(l0_store.db.execute(
+        "SELECT 1 FROM files WHERE path = ? OR path LIKE ? LIMIT 1",
+        (root, root + os.sep + "%")).fetchone())

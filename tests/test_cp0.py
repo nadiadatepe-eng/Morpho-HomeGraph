@@ -44,7 +44,7 @@ from morpho_homegraph.lock import (  # noqa: E402
     ALLOW_REMOTE, LOCAL_FILESYSTEMS, Locked, NotLocal, StoreLock, Unguarded,
     filesystem_of)
 from morpho_homegraph.store import (  # noqa: E402
-    BUSY_TIMEOUT_MS, SCHEMA_VERSION, Store, db_path, projects)
+    BUSY_TIMEOUT_MS, SCHEMA_VERSION, Store, db_path, l0_path, projects)
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 results, check = reporter(52)
@@ -172,9 +172,31 @@ def second_guard(db, seconds=5):
 
 
 def add_project(tree):
+    """A registered project, with the catalogue `update` now needs.
+
+    **The `scan` is a precondition, not part of any gate here.** CP-7B gave
+    `update` something to do -- it builds the project's own layers from L0 --
+    and with that came a refusal when L0 has never been built. The barrier
+    gates below use `update` as *a writer*, and a writer that refuses for
+    reasons of its own would test the refusal instead of the barrier. So the
+    catalogue is built once, and the gates go on measuring what they were
+    written for.
+    """
     proc = cli("add", str(tree))
     if proc.returncode != 0:
         raise RuntimeError("add failed: %s" % proc.stderr)
+    # Every time, and over the *parent*: `scan` replaces L0 wholesale, so
+    # cataloguing one fixture erases the last one, and the next `update` is
+    # refused for a tree the catalogue no longer holds. That is CP-7B R3 doing
+    # its job in the wrong place.
+    scanned = cli("scan", os.path.dirname(str(tree).rstrip(os.sep)))
+    # A *refusal* is allowed to pass here, and only a refusal. Under a mutation
+    # that makes the guard refuse everyone, raising would take the harness down
+    # before a single gate ran -- and a crash names no gate. Measured
+    # 2026-08-04: "every writer is refused, contended or not" went from killed
+    # to crash-only the moment this helper started scanning.
+    if scanned.returncode not in (0, 2):
+        raise RuntimeError("scan failed: %s" % scanned.stderr)
     return proc.stdout.split()[0]
 
 
