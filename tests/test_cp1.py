@@ -470,12 +470,12 @@ def gates_shared_l0(tree):
         with Store(project_db, role=PROJECT) as store:
             tables = {r[0] for r in store.db.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")}
-            # `scope` arrived with CP-3, `content` with CP-4. The set grows one entry per
+            # `scope` came with CP-3, `content` with CP-4, `edges` with CP-5. One per
             # checkpoint that adds a project-side table, and the equality is
             # what makes a table nobody declared show up as a failure -- it
             # has caught CP-2's `journal` and CP-3's `scope` already.
             check("16 a project store has no L0 table to fill by accident",
-                  tables == {"meta", "scope", "content"}, "tables=%s" % sorted(tables))
+                  tables == {"meta", "scope", "content", "edges"}, "tables=%s" % sorted(tables))
             # Refused rather than merely undeclared: without the check, a
             # caller that created the table first would be allowed to fill it.
             #

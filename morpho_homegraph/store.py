@@ -30,7 +30,7 @@ from pathlib import Path
 
 from .lock import Unguarded, holds
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # Two roles, two schemas, and the split is the point. **L0 is shared**: it
 # describes the whole home area, it is identical for every project, and it
@@ -109,6 +109,25 @@ SCHEMA = {
                 "  sha256 TEXT,"
                 "  text TEXT,"
                 "  reason TEXT)"),
+    # L3 (CP-5). Only the edges: a *node* is a distinct `content.sha256`, and
+    # its paths are the `content` rows carrying that hash. Identity is the
+    # content (locked decision 1), so two files with identical bytes are one
+    # node with two paths -- and a `nodes` table would be that same fact
+    # written down twice, with the copy free to drift.
+    #
+    # `method` and `confidence` are NOT NULL because an edge that does not say
+    # how it came to exist is indistinguishable from one the file stated, and
+    # that is the difference the whole layer is for. `(src, dst, kind)` is the
+    # key so re-asserting an edge upgrades it in place rather than leaving the
+    # derived version beside the stated one.
+    "edges": (PROJECT,
+              "CREATE TABLE IF NOT EXISTS edges ("
+              "  src TEXT NOT NULL,"
+              "  dst TEXT NOT NULL,"
+              "  kind TEXT NOT NULL,"
+              "  method TEXT NOT NULL,"
+              "  confidence REAL NOT NULL,"
+              "  PRIMARY KEY (src, dst, kind))"),
 }
 
 # Milliseconds a reader or writer waits on a locked SQLite page before giving
