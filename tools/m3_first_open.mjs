@@ -28,7 +28,12 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { createRequire } from 'node:module';
 
-const MODULES = '/home/nadi/.claude/tools/memory-search/node_modules';
+// Where `@xenova/transformers` already lives, so M-3 measures the model and
+// not an install. It is a borrowed location, not part of this project, so it
+// comes from the environment -- hardcoded it named one machine's home and
+// worked on no other.
+const MODULES = process.env.MHG_NODE_MODULES
+  || join(process.env.HOME ?? '', '.claude/tools/memory-search/node_modules');
 const MODEL = 'Xenova/paraphrase-multilingual-MiniLM-L12-v2';
 
 // From the plan. Changing any of these invalidates comparison with the number
