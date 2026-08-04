@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 .venv/
 tools/m1-*.txt
+node_modules/
