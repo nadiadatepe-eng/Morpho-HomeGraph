@@ -167,9 +167,25 @@ def _fnmatch_path(value: str, pattern: str) -> bool:
 
 
 def from_repo(root: str) -> tuple[Scope, list[tuple[str, bool, bool, bool]]]:
-    """A scope that includes `root`, plus its root `.gitignore` as a skip list."""
+    """A scope that includes `root`, minus `.git`, plus its root `.gitignore`.
+
+    **`.git` is excluded explicitly, because `.gitignore` never mentions it.**
+    Locked decision 3 makes `.gitignore` the skip list for repos, and that is
+    still true -- but it is a list of what the *user* wanted git to ignore, and
+    nobody writes their own repository's storage into it. Measured 2026-08-04
+    on `~/homegraph`: without this line, 896 of 1 729 L2 rows are git objects,
+    52 % of the layer, and every count downstream needs a footnote.
+
+    The data is not lost, which is what makes pruning the right layer for
+    this: L0 still holds every path under `.git`, so anything that later wants
+    git's own history -- co-change edges, say -- reads it there. The scope only
+    decides what is read *as content*.
+
+    `from_folder` has excluded `.git` since CP-3 through `JUNK`. The asymmetry
+    was the accident, not the rule.
+    """
     root = str(Path(root).expanduser().resolve())
-    scope = Scope().add(root, INCLUDE)
+    scope = Scope().add(root, INCLUDE).add(os.path.join(root, ".git"), EXCLUDE)
     path = os.path.join(root, ".gitignore")
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:

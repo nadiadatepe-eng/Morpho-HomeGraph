@@ -149,6 +149,19 @@ def gates_gitignore(work):
           and not gitignored("src/main.py", False, patterns),
           "%d patterns" % len(patterns))
 
+    # R6b: `.git` is out, and the neighbour that merely starts the same is in.
+    # Without the second half, a rule matching on characters instead of path
+    # separators passes -- and `.github` is the directory it would eat.
+    write(os.path.join(repo, ".git", "objects", "ab", "cdef"), "binary\n")
+    write(os.path.join(repo, ".github", "workflows", "ci.yml"), "on: push\n")
+    check("17 .git is pruned in a repo, .github is not",
+          not scope.contains(os.path.join(repo, ".git", "objects", "ab",
+                                          "cdef"))
+          and not scope.contains(os.path.join(repo, ".git"))
+          and scope.contains(os.path.join(repo, ".github", "workflows",
+                                          "ci.yml")),
+          "%d rules" % len(scope.rules))
+
     bare = os.path.join(work, "bare-repo")
     write(os.path.join(bare, ".git", "HEAD"), "ref: refs/heads/main\n")
     write(os.path.join(bare, "only.py"))

@@ -16,6 +16,26 @@ import sys
 from mutate import run
 
 MUTATIONS = [
+    # -- .git is pruned in a repo too (R6b, added after CP-4 measured it) --
+    #
+    # Removing this leaves every gate green except 17, and puts 52 % of L2
+    # back -- measured on ~/homegraph 2026-08-04. A defect that makes the
+    # layer *bigger* is the kind nothing else notices.
+    ("a repo's own .git stays in the scope",
+     "morpho_homegraph/scope.py",
+     "    scope = Scope().add(root, INCLUDE).add(os.path.join(root, \".git\"), EXCLUDE)",
+     "    scope = Scope().add(root, INCLUDE)  # mutated",
+     "17 .git is pruned in a repo, .github is not"),
+
+    # The prefix trap, in the scope this time: `.github` starts with `.git`,
+    # and a rule that compares characters rather than path segments eats it.
+    ("the .git exclusion matches on characters, not path segments",
+     "morpho_homegraph/scope.py",
+     "def _under(path: str, root: str) -> bool:",
+     "def _under(path: str, root: str) -> bool:\n"
+     "    return path.startswith(root)  # mutated",
+     "17 .git is pruned in a repo, .github is not"),
+
     # -- the innermost rule wins, in both directions ----------------------
     ("the outermost rule wins instead of the innermost",
      "morpho_homegraph/scope.py",
