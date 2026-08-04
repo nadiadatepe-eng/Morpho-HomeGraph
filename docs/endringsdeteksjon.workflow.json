@@ -15,7 +15,7 @@
   ],
   "mainPath": ["scan", "cmp", "hash", "read"],
   "nodes": [
-    { "id": "scan", "lane": "katalog", "col": 0, "type": "frontend", "label": "Gjennomgang", "sublabel": "stat() på alt", "tag": "0,23 s" },
+    { "id": "scan", "lane": "katalog", "col": 0, "type": "frontend", "label": "Gjennomgang", "sublabel": "stat() på alt", "tag": "7,51 s kald" },
     { "id": "cmp", "lane": "journal", "col": 1, "type": "backend", "label": "Sammenlign", "sublabel": "størrelse + mtime" },
     { "id": "hash", "lane": "journal", "col": 3, "type": "backend", "label": "Hash", "sublabel": "bekrefter bytene" },
     { "id": "read", "lane": "innhold", "col": 5, "type": "database", "label": "Les innhold", "sublabel": "kode som tekst", "tag": "eneste dyre steg" },

@@ -31,6 +31,61 @@ MUTATIONS = [
      "                open(entry.path, 'rb').read(1)",
      "3  the audit hook sees no file opened during a walk"),
 
+    # -- the deny-list ----------------------------------------------------
+    #
+    # The first one is the reason the fixture has a `.cachexyz` next to the
+    # `.cache`: a string prefix removes rows, and removing rows is what a
+    # working deny-list looks like from the outside.
+    ("the deny-list matches on characters, not path separators",
+     "morpho_homegraph/scan.py",
+     "    return any(path == d or path.startswith(d + os.sep) for d in deny)",
+     "    return any(path.startswith(d) for d in deny)  # mutated",
+     "21 a neighbour that only starts the same is kept"),
+
+    ("denied directories are skipped as rows but still descended into",
+     "morpho_homegraph/scan.py",
+     "            if _denied(entry.path, deny):\n"
+     "                yield (\"!\" + entry.path, \"pruned\", 0, 0, 0, 0)\n"
+     "                continue",
+     "            if _denied(entry.path, deny) and not entry.is_dir(\n"
+     "                    follow_symlinks=False):  # mutated\n"
+     "                yield (\"!\" + entry.path, \"pruned\", 0, 0, 0, 0)\n"
+     "                continue",
+     "22 nothing under a denied directory is reached"),
+
+    ("pruning happens, but leaves no trace to count",
+     "morpho_homegraph/scan.py",
+     "                yield (\"!\" + entry.path, \"pruned\", 0, 0, 0, 0)\n"
+     "                continue",
+     "                continue  # mutated: pruned without a marker",
+     "25 pruned paths are counted, not silently dropped"),
+
+    ("a root on the deny-list scans to an empty result",
+     "morpho_homegraph/scan.py",
+     "    if _denied(root, deny):\n"
+     "        # Otherwise: zero rows written over a full store, which is data loss\n"
+     "        # wearing the shape of a successful scan.\n"
+     "        raise DeniedRoot(\"the root to scan is on the deny-list: %s\" % root)",
+     "    if False:  # mutated: the empty scan is allowed through\n"
+     "        raise DeniedRoot(\"the root to scan is on the deny-list: %s\" % root)",
+     "26 a root that is itself denied is refused"),
+
+    # Every other deny gate passes its own list, so all of them survive this
+    # one. It is the mutation that proves gate 27 is not decoration.
+    ("the shipped deny-list is empty",
+     "morpho_homegraph/scan.py",
+     "DEFAULT_DENY = (\n"
+     "    \"~/GoogleDrive\",",
+     "DEFAULT_DENY = (  # mutated: nothing is denied by default\n"
+     "    \"~/nothing-is-here\",",
+     "27 the shipped default denies the cloud drives and the cache"),
+
+    ("normalising the root can strip it away entirely",
+     "morpho_homegraph/scan.py",
+     "    return str(Path(root).expanduser()).rstrip(os.sep) or os.sep",
+     "    return str(Path(root).expanduser()).rstrip(os.sep)  # mutated",
+     "28 normalising a root never empties it"),
+
     # -- symlinks are their own thing -------------------------------------
     ("the walk follows symlinks when stat-ing",
      "morpho_homegraph/scan.py",

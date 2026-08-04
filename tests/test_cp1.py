@@ -32,7 +32,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from report import reporter  # noqa: E402
 
 from morpho_homegraph.lock import Locked, StoreLock, Unguarded  # noqa: E402
-from morpho_homegraph.scan import WrongStore, scan, walk  # noqa: E402
+from morpho_homegraph.scan import (  # noqa: E402
+    DEFAULT_DENY, DeniedRoot, WrongStore, _normalise_root, scan, walk)
 from morpho_homegraph.store import (  # noqa: E402
     L0, PROJECT, Store, data_home, db_path, l0_path, new_project)
 
@@ -159,6 +160,81 @@ def gates_walk(tree, closed):
     check("13 mtime is an integer count of nanoseconds",
           all(isinstance(m, int) for m in mtimes) and max(mtimes) > 10 ** 17,
           "max=%s" % max(mtimes))
+
+
+def build_deny_tree(root):
+    """A denied directory, a neighbour that merely starts the same, and content
+    under both. The neighbour is the whole reason this fixture is not one
+    directory: a deny-list that compares string prefixes passes every gate here
+    except 21."""
+    denied = os.path.join(root, ".cache")
+    neighbour = os.path.join(root, ".cachexyz")
+    for d in (denied, neighbour):
+        os.makedirs(os.path.join(d, "inner"), exist_ok=True)
+        with open(os.path.join(d, "inner", "f.txt"), "w") as fh:
+            fh.write("x")
+    with open(os.path.join(root, "keep.txt"), "w") as fh:
+        fh.write("y")
+    return denied, neighbour
+
+
+def gates_deny(work):
+    root = os.path.join(work, "denytree")
+    os.makedirs(root)
+    denied, neighbour = build_deny_tree(root)
+
+    rows = list(walk(root, deny=(denied,)))
+    paths = {p for p, kind, *_ in rows if kind != "pruned"}
+    pruned = [p for p, kind, *_ in rows if kind == "pruned"]
+
+    check("20 a denied directory leaves no row behind", denied not in paths,
+          "%d rows kept" % len(paths))
+    check("21 a neighbour that only starts the same is kept",
+          neighbour in paths and os.path.join(neighbour, "inner", "f.txt") in paths,
+          "%s survives .cache" % os.path.basename(neighbour))
+    under = [p for p in paths if p.startswith(denied + os.sep)]
+    check("22 nothing under a denied directory is reached", not under,
+          "%d rows under it" % len(under))
+
+    none_denied = {p for p, kind, *_ in walk(root, deny=()) if kind != "pruned"}
+    miss = {p for p, kind, *_ in walk(root, deny=("/nowhere/at/all",))
+            if kind != "pruned"}
+    check("23 an empty deny-list is legal and prunes nothing",
+          bool(none_denied) and len(none_denied) > len(paths),
+          "%d without vs %d with" % (len(none_denied), len(paths)))
+    check("24 a deny entry that matches nothing changes nothing",
+          miss == none_denied, "%d rows either way" % len(miss))
+
+    # Without this, gates 20-22 are equally satisfied by a walk that reached
+    # nothing at all -- the pruning has to be visible as a number.
+    check("25 pruned paths are counted, not silently dropped",
+          len(pruned) == 1 and pruned[0].endswith(denied),
+          "%d pruned" % len(pruned))
+
+    try:
+        list(walk(root, deny=(root,)))
+        check("26 a root that is itself denied is refused", False, "no error")
+    except DeniedRoot:
+        check("26 a root that is itself denied is refused", True,
+              "DeniedRoot, store untouched")
+
+    # Every gate above passes an explicit list, so all of them stay green if
+    # the shipped default is emptied. The default is the thing that actually
+    # runs, so it gets a gate of its own.
+    required = {"~/GoogleDrive", "~/OneDrive", "~/.cache"}
+    check("27 the shipped default denies the cloud drives and the cache",
+          required <= set(DEFAULT_DENY),
+          "missing %s" % (sorted(required - set(DEFAULT_DENY)) or "nothing"))
+
+    # Stripping trailing separators turns "/" into "", and os.scandir("")
+    # reports a single unreadable row rather than raising -- a scan of the
+    # filesystem root would answer "one entry" and no error. Checked on the
+    # helper: observing it through a walk means walking the whole filesystem.
+    norm = {r: _normalise_root(r) for r in ("/", "/home/nadi/", "/home/nadi")}
+    check("28 normalising a root never empties it",
+          norm["/"] == os.sep
+          and norm["/home/nadi/"] == norm["/home/nadi"] == "/home/nadi",
+          "%r -> %r" % ("/", norm["/"]))
 
 
 def gates_vanishing(work):
@@ -465,6 +541,7 @@ def main():
         closed = build_tree(tree)
         try:
             gates_walk(tree, closed)
+            gates_deny(work)
             gates_vanishing(work)
             gates_audit_hook(tree)
             gates_strace(tree)

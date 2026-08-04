@@ -11,7 +11,7 @@
         "id": "bredt",
         "label": "Bredt lag — gratis",
         "focus": ["disk", "l0", "l1", "svc"],
-        "note": "Hele hjemmeområdet, kun stat(). 628 862 filer på 0,23 s."
+        "note": "Hele hjemmeområdet, kun stat(). 729 343 oppføringer på 7,51 s kald (M-1)."
       },
       {
         "id": "porten",
@@ -34,7 +34,7 @@
     ]
   },
   "components": [
-    { "id": "disk", "type": "external", "label": "Hjemmeomradet", "sublabel": "628 862 filer", "tag": "malt 2026-08-03", "pos": [290, 40], "size": [170, 56] },
+    { "id": "disk", "type": "external", "label": "Hjemmeomradet", "sublabel": "729 343 oppforinger", "tag": "M-1, malt 2026-08-03", "pos": [290, 40], "size": [170, 56] },
     { "id": "l0", "type": "cloud", "label": "L0 Katalog", "sublabel": "sti · storrelse · mtime · inode", "tag": "apner aldri en fil", "pos": [290, 136], "size": [170, 56] },
     { "id": "l1", "type": "backend", "label": "L1 Endringsjournal", "sublabel": "storrelse+mtime, hash bekrefter", "pos": [290, 232], "size": [170, 56] },
     { "id": "scope", "type": "security", "label": "Omfangsvelger", "sublabel": "brukeren peker · innerste vinner", "tag": "beskjaeringen ligger her", "pos": [290, 328], "size": [170, 56] },
@@ -65,7 +65,7 @@
       "dot": "cyan",
       "title": "Grunnsetningen",
       "items": [
-        "628 862 filer pa 0,23 s — metadata er nesten gratis",
+        "729 343 oppforinger pa 5,13 s varm / 7,51 s kald — metadata er nesten gratis",
         "Innhold er dyrt, sa bare valgt omfang leses",
         "Beskjaeringen ligger mellom L1 og L2, ikke foran L0",
         "Navnesok svarer fra L0 og dekker derfor hele hjemmet"

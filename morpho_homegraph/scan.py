@@ -2,9 +2,11 @@
 """L0: metadata about every file, and nothing else.
 
 `stat()` and nothing else, over the whole home area. The ground fact the
-design rests on -- 628 862 files in 0.23 s, measured 2026-08-03 -- holds only
-as long as this layer never opens a file, so "never opens a file" is a
-property with two independent detectors on it rather than a comment.
+design rests on -- 729 343 entries in 5.13 s warm / 7.51 s cold, measured by
+M-1 on 2026-08-03 -- holds only as long as this layer never opens a file, so
+"never opens a file" is a property with two independent detectors on it rather
+than a comment. (The inherited "628 862 files in 0.23 s" this docstring used to
+quote does not reproduce; M-1 replaced it.)
 
 **Directories are opened; files are not.** `os.scandir` calls `opendir`, and a
 walk that does not is not a walk. `entry.stat(follow_symlinks=False)` is
@@ -28,10 +30,60 @@ from .store import L0
 class WrongStore(RuntimeError):
     """L0 was aimed at a store that is not the shared L0 store."""
 
+
+class DeniedRoot(ValueError):
+    """The root to scan is itself on the deny-list."""
+
 # What a row's `kind` can be. Kept explicit rather than derived from `stat`
 # bits at read time, so a caller asking "how many directories" does not have
 # to know st_mode.
 FILE, DIR, LINK, OTHER = "file", "dir", "link", "other"
+
+# The deny-list, as data and in one place. Short on purpose: L0 covers the
+# whole home area so that name search does, and every entry here is a place
+# the user cannot then find anything in.
+#
+# The cloud drives are listed while empty. Mounted later, descending them is a
+# *network* operation that can hang or pull files down, and by then the scan is
+# already running. `~/.cache` is 281 150 of 729 343 entries, measured 08-02:
+# four fifths of the walk is browser and model cache nobody searches.
+#
+# `node_modules`, `.git`, `.venv` and friends deliberately do NOT belong here.
+# They are CP-3's scope filter. L0 must still be able to answer "this file
+# exists" about a file inside one.
+DEFAULT_DENY = (
+    "~/GoogleDrive",
+    "~/OneDrive",
+    "~/.cache",
+    "~/.local/share/Trash",
+    "~/snap",
+)
+
+
+def _normalise_root(root: str | Path) -> str:
+    """Absolute, `~`-expanded, no trailing separator -- except at the filesystem
+    root, where the separator *is* the path.
+
+    Its own function so the "/" case has somewhere to be gated. Inline, the
+    only way to observe it was to walk the whole filesystem, and a property
+    that expensive to check is a property nobody checks.
+    """
+    return str(Path(root).expanduser()).rstrip(os.sep) or os.sep
+
+
+def _expand(deny) -> tuple[str, ...]:
+    """Absolute, `~`-expanded, trailing separators stripped -- once, not per entry."""
+    return tuple(str(Path(d).expanduser()).rstrip(os.sep) for d in deny)
+
+
+def _denied(path: str, deny: tuple[str, ...]) -> bool:
+    """True if `path` is a denied directory or lives under one.
+
+    The `+ os.sep` is the whole rule: a bare `startswith` would swallow
+    `~/.cachexyz` along with `~/.cache`, and that mistake removes rows, which
+    looks exactly like a deny-list that works.
+    """
+    return any(path == d or path.startswith(d + os.sep) for d in deny)
 
 
 def _kind(entry: os.DirEntry) -> str:
@@ -46,7 +98,7 @@ def _kind(entry: os.DirEntry) -> str:
     return OTHER
 
 
-def walk(root: str | Path):
+def walk(root: str | Path, deny=DEFAULT_DENY):
     """Yield `(path, kind, size, mtime_ns, inode, dev)` for everything under `root`.
 
     Iterative, not recursive: a home area is deeper than the interpreter's
@@ -56,8 +108,20 @@ def walk(root: str | Path):
     Unreadable directories are yielded as their own row and not descended
     into. Missing permissions are the normal state of a home directory, and a
     walk that stops at the first one reports a number that is simply wrong.
+
+    `deny` prunes: a denied path yields no row and is never descended into.
+    Pruning rather than filtering afterwards is the point -- a filter has
+    already paid for the entries it drops. Pass `deny=()` to scan everything;
+    that is legal and must give the same count as before the list existed.
+    Pruned paths are counted through the `("!pruned", ...)` marker row so a
+    deny-list that fires zero times cannot look like one that works.
     """
-    root = str(Path(root).expanduser())
+    root = _normalise_root(root)
+    deny = _expand(deny)
+    if _denied(root, deny):
+        # Otherwise: zero rows written over a full store, which is data loss
+        # wearing the shape of a successful scan.
+        raise DeniedRoot("the root to scan is on the deny-list: %s" % root)
     pending = [root]
     seen_dirs: set[tuple[int, int]] = set()
     while pending:
@@ -71,6 +135,9 @@ def walk(root: str | Path):
             yield ("!" + current, "unreadable", 0, 0, 0, 0)
             continue
         for entry in entries:
+            if _denied(entry.path, deny):
+                yield ("!" + entry.path, "pruned", 0, 0, 0, 0)
+                continue
             try:
                 st = entry.stat(follow_symlinks=False)
             except OSError:
@@ -92,7 +159,7 @@ def walk(root: str | Path):
 
 
 def scan(store, root: str | Path,
-         scope: list[str] | None = None) -> dict:
+         scope: list[str] | None = None, deny=DEFAULT_DENY) -> dict:
     """Walk `root` into the store's `files` table. Returns a summary.
 
     The whole walk is one transaction. A half-written L0 is worse than none:
@@ -109,16 +176,19 @@ def scan(store, root: str | Path,
             "L0 belongs in the shared store, not in a %r one: %s"
             % (store.role, store.path))
     started = time.perf_counter()
-    counted = {"kept": 0, "unreadable": 0}
+    counted = {"kept": 0, "unreadable": 0, "pruned": 0}
 
     def rows():
         # Streamed into `executemany`, not collected first. Measured
         # 2026-08-03: a home area is 729 303 entries, and materialising them
         # costs 113 MB before a single row is written -- for a service that
         # holds the model in memory as well, that is a cost with no purpose.
-        for row in walk(root):
+        for row in walk(root, deny):
             if row[1] == "unreadable":
                 counted["unreadable"] += 1
+                continue
+            if row[1] == "pruned":
+                counted["pruned"] += 1
                 continue
             counted["kept"] += 1
             yield row
@@ -144,6 +214,8 @@ def scan(store, root: str | Path,
     store.set_meta("l0_count", str(counted["kept"]))
     store.set_meta("l0_seconds", "%.3f" % elapsed)
     store.set_meta("l0_unreadable", str(counted["unreadable"]))
+    store.set_meta("l0_pruned", str(counted["pruned"]))
     store.set_meta("l1_tally", repr(tally))
     return {"count": counted["kept"], "seconds": elapsed,
-            "unreadable": counted["unreadable"], "journal": tally}
+            "unreadable": counted["unreadable"], "pruned": counted["pruned"],
+            "journal": tally}
