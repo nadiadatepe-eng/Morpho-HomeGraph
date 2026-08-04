@@ -17,7 +17,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import content, graph, identity, scope, snapshot
+from . import content, graph, identity, scope, search, snapshot
 from .lock import Locked, StoreLock
 from .scan import knows, scan
 from .store import (L0, Store, data_home, db_path, initialise, l0_path,
@@ -276,15 +276,64 @@ def cmd_update(args: argparse.Namespace) -> int:
                 scope.save(store, chosen)
                 l2 = content.build(store, l0, chosen)
                 l3 = graph.build(store, scope_root=root)
+                l4 = search.build(store)
             store.set_meta("last_update",
                            datetime.now().isoformat(timespec="seconds"))
     finally:
         barrier.release()
 
     print("%s  %s\nL2  %d read, %d unread\nL3  %d edges (%d ambiguous, "
-          "%d outside)"
+          "%d outside)\nL4  %d rows indexed"
           % (project_id, root, l2["read"], l2["unread"], l3["edges"],
-             l3["ambiguous"], l3["outside"]))
+             l3["ambiguous"], l3["outside"], l4["rows"]))
+    return 0
+
+
+def cmd_search(args: argparse.Namespace) -> int:
+    """Reader. Two questions, and they are not the same one.
+
+    `--names` answers from L0 and therefore covers the whole home area;
+    everything else answers from a project's L2 and covers only what the user
+    pointed at. That is locked decision 7 -- metadata everywhere, content where
+    you point -- and it is why a name search does not need a project to exist.
+
+    Exit 1, not 0, when the index cannot answer: zero hits from an index that
+    was never built looks exactly like zero hits from a corpus without the
+    word, and only one of those is an answer.
+    """
+    if args.names:
+        if not l0_path().is_file():
+            print("REFUSED  the catalogue has not been built: "
+                  "morphofiles-graph scan", file=sys.stderr)
+            return 2
+        with Store(l0_path(), read_only=True, role=L0) as l0:
+            hits = search.names(l0, args.query)
+        for hit in hits:
+            print("%-6s %s" % (hit["kind"], hit["path"]))
+        if not hits:
+            print("no matches for %r in the catalogue" % args.query)
+        return 0
+
+    if not args.project:
+        raise SystemExit("which project? morphofiles-graph search --project "
+                         "<id|path> <query>  (or --names for the catalogue)")
+    store_db = db_path(_resolve(args.project))
+    if not store_db.is_file():
+        raise SystemExit("%s has no index yet: morphofiles-graph update %s"
+                         % (args.project, args.project))
+    with Store(store_db, read_only=True) as store:
+        condition, indexed, expected = search.state(store)
+        if condition != "ok":
+            print("REFUSED  the search index is %s (%d rows indexed, %d in "
+                  "L2) -- morphofiles-graph update %s. Answering would look "
+                  "like 'no matches'" % (condition, indexed, expected,
+                                         args.project), file=sys.stderr)
+            return 1
+        hits = search.content(store, args.query)
+    for hit in hits:
+        print("%-8s %s" % (hit["where"], hit["path"]))
+    if not hits:
+        print("no matches for %r in %d indexed files" % (args.query, indexed))
     return 0
 
 
@@ -346,6 +395,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_scan.add_argument("root", nargs="?", default="~",
                         help="what to catalogue (default: the home area)")
     p_scan.set_defaults(func=cmd_scan)
+
+    p_search = sub.add_parser("search", help="lexical search over L2, or L0 names")
+    p_search.add_argument("query")
+    p_search.add_argument("--project", help="project id or path")
+    p_search.add_argument("--names", action="store_true",
+                          help="search the catalogue's paths instead (whole home area)")
+    p_search.set_defaults(func=cmd_search)
 
     p_snap = sub.add_parser("snapshot",
                             help="snapshot a project and prune the window")
