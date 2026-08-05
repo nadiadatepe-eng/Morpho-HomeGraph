@@ -389,6 +389,9 @@ def build(store) -> dict[str, int]:
                     db.commit()
                 embedded += len(fresh)
 
+    # The vector layer's own clock (CP-12 R10). Without it the layer that is
+    # most expensive to build is the one nobody can date.
+    store.set_meta("embed_at", "%.3f" % time.time())
     store.set_meta("embed_chunks", str(len(wanted)))
     store.set_meta("embed_processes", str(processes))
     store.set_meta("embed_seconds", "%.3f" % (time.perf_counter() - started))

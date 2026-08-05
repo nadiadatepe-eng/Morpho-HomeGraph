@@ -93,7 +93,7 @@ MUTATIONS = [
      '            "edges": sorted(edges, key=lambda e: (e["from"], e["to"]))}',
      '    return {"root": ".", "nodes": list(nodes.values()),  # mutated\n'
      '            "edges": edges}',
-     "10 two exports agree, and the file is written in sorted order"),
+     "10 two exports agree on the graph, written in sorted order"),
 
     ("a hostile filename is escaped on the way out",
      "morpho_homegraph/view.py",

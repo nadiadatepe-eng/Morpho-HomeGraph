@@ -261,15 +261,20 @@ def gates_graph(work):
     # actually holds the file still is the sort -- it is what makes two stores
     # built from the same tree agree, and what stops one added file from
     # shifting every line. So the gate asserts the order, not only the repeat.
-    first = open(os.path.join(out, "data.json"), "rb").read()
+    # The *graph* repeats, not the file: CP-12 made the export date itself,
+    # and `exported_at` is a fact about the run rather than about the corpus.
+    # Comparing whole files would have made "the same corpus draws the same
+    # picture" fail for the one reason that does not matter.
     cli("view", project_id, "--out", out)
+    with open(os.path.join(out, "data.json"), encoding="utf-8") as fh:
+        again = json.load(fh)
     ids = [node["id"] for node in data["nodes"]]
     pairs = [(edge["from"], edge["to"]) for edge in data["edges"]]
-    check("10 two exports agree, and the file is written in sorted order",
-          first == open(os.path.join(out, "data.json"), "rb").read()
+    check("10 two exports agree on the graph, written in sorted order",
+          again["nodes"] == data["nodes"] and again["edges"] == data["edges"]
           and ids == sorted(ids) and pairs == sorted(pairs),
-          "%d bytes, sorted: %s/%s"
-          % (len(first), ids == sorted(ids), pairs == sorted(pairs)))
+          "%d nodes, sorted: %s/%s"
+          % (len(ids), ids == sorted(ids), pairs == sorted(pairs)))
 
     hostile = [node for node in data["nodes"] if "onerror" in node["name"]]
     check("15 a filename that is live markup survives the export untouched",

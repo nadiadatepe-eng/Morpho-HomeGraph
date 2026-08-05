@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import time
 from pathlib import Path
 
 from .store import PROJECT
@@ -63,12 +64,17 @@ def kind_of(name: str) -> str:
     return suffix[1:] if suffix else "(none)"
 
 
-def graph(store, root: str) -> dict:
+def graph(store, root: str, state: dict | None = None) -> dict:
     """`{"root": str, "nodes": [...], "edges": [...]}` for one project.
 
-    Paths are project-relative (R9). Sorted on the way out so two exports of
-    one store are byte-identical -- the data half of "the same corpus draws
-    the same picture twice".
+    Paths are project-relative (CP-11 R9). Sorted on the way out, so the same
+    corpus produces the same nodes and edges in the same order -- the data
+    half of "the same corpus draws the same picture twice".
+
+    `state` is CP-12's per-file freshness, keyed by absolute path because that
+    is what `content` holds. It rides along on the file nodes so the picture
+    and the text answer the same question from the same values (CP-12 R7); a
+    colour nobody can trace back to a number is a colour nobody can check.
     """
     if store.role != PROJECT:
         raise NothingToDraw("a view belongs to a project store, not a %r one"
@@ -95,7 +101,8 @@ def graph(store, root: str) -> dict:
         leaf = relative.replace(os.sep, "/")
         nodes[leaf] = {"id": leaf, "kind": "file", "name": parts[-1],
                        "path": leaf, "depth": len(parts),
-                       "type": kind_of(parts[-1])}
+                       "type": kind_of(parts[-1]),
+                       "state": (state or {}).get(absolute, "fresh")}
         parent_of[leaf] = walked
 
     _bucket(nodes, parent_of)
@@ -133,14 +140,22 @@ def _bucket(nodes: dict, parent_of: dict) -> None:
             nodes[file_id]["depth"] = nodes[bucket]["depth"] + 1
 
 
-def write(store, root: str, out: Path, page: Path) -> dict:
+def write(store, root: str, out: Path, page: Path,
+          state: dict | None = None, ages: dict | None = None) -> dict:
     """Write a self-contained view directory. Returns the graph's tally.
 
     The page, the engine and the data land in one folder on purpose: a view
     that reaches back into the repository for its JavaScript works on the
     machine it was built on and nowhere else.
     """
-    data = graph(store, root)
+    data = graph(store, root, state)
+    # The export dates itself (CP-12 R9). The page can be opened tomorrow, and
+    # an age computed in the browser would say "a minute old" about a file it
+    # never saw change. `exported_at` and the layer ages are facts about this
+    # run, so they live beside the graph rather than inside it -- the nodes and
+    # edges stay byte-identical between two runs of one store.
+    data["exported_at"] = time.time()
+    data["ages"] = ages or {}
     # Writing the view *into* its own source would delete `js/` and then copy
     # from the hole it just made. Refused rather than guarded per file: there
     # is no useful meaning for `--out view`, and a half-deleted checkout is a
@@ -162,6 +177,10 @@ def write(store, root: str, out: Path, page: Path) -> dict:
         json.dump(data, fh, ensure_ascii=False, indent=1, sort_keys=True)
         fh.write("\n")
     kinds = {"dir": 0, "file": 0, "bucket": 0}
+    states: dict[str, int] = {}
     for node in data["nodes"]:
         kinds[node["kind"]] += 1
-    return {"nodes": len(data["nodes"]), "edges": len(data["edges"]), **kinds}
+        if node["kind"] == "file":
+            states[node["state"]] = states.get(node["state"], 0) + 1
+    return {"nodes": len(data["nodes"]), "edges": len(data["edges"]),
+            "states": states, **kinds}

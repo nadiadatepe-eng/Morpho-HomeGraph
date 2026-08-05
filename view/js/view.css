@@ -5,7 +5,11 @@ body { margin: 0; font: 15px/1.4 system-ui, sans-serif; color: #222; background:
 header { padding: .75rem 1rem .25rem; }
 h1 { margin: 0; font-size: 1.1rem; font-weight: 600; }
 #status { margin: .2rem 0 .5rem; color: #666; font-size: .85rem; }
-#graph { display: block; width: 100vw; height: calc(100vh - 4.5rem); }
+#legend { display: flex; flex-wrap: wrap; gap: .25rem 1.25rem; padding: 0 1rem .5rem;
+          font-size: .8rem; color: #444; }
+#legend > div { display: flex; align-items: center; gap: .35rem; }
+.swatch { width: .7rem; height: .7rem; border-radius: 50%; display: inline-block; }
+#graph { display: block; width: 100vw; height: calc(100vh - 7rem); }
 #hover { position: fixed; z-index: 10; pointer-events: none; max-width: 32rem;
          background: #111; color: #fff; padding: .3rem .5rem; border-radius: .25rem;
          font-size: .8rem; white-space: pre-wrap; word-break: break-all; }

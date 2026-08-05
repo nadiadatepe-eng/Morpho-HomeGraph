@@ -17,8 +17,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import (content, embed, fusion, graph, identity, scope, search,
-               snapshot, view)
+from . import (content, embed, freshness, fusion, graph, identity, scope,
+               search, snapshot, view)
 from .lock import Locked, StoreLock
 from .scan import knows, scan
 from .store import (L0, Store, data_home, db_path, initialise, l0_path,
@@ -144,6 +144,20 @@ def cmd_status(args: argparse.Namespace) -> int:
             print("%-14s not built: morphofiles-graph update %s"
                   % ("", args.project))
     return 0
+
+
+def _ages(store=None) -> str:
+    """The line every answer ends with: how old is each layer it read (R1).
+
+    Opens the catalogue itself rather than taking it as an argument, because
+    every answering command needs it and none of them otherwise has it open.
+    A missing catalogue is reported as `never`, not left out -- "I did not
+    read that layer" and "that layer was never built" are different facts.
+    """
+    if l0_path().is_file():
+        with Store(l0_path(), read_only=True, role=L0) as l0:
+            return freshness.describe(freshness.ages(store, l0))
+    return freshness.describe(freshness.ages(store))
 
 
 def _guard_or_refuse(store_db: Path) -> StoreLock | None:
@@ -321,10 +335,17 @@ def cmd_search(args: argparse.Namespace) -> int:
             return 2
         with Store(l0_path(), read_only=True, role=L0) as l0:
             hits = search.names(l0, args.query)
+            # The age is the whole of CP-12 R3, and it closes a measured
+            # failure: on 2026-08-04 a search for `fasit-cp8` found the
+            # predecessor's file and not ours, because the catalogue had last
+            # been walked before ours was written -- and the answer said
+            # nothing. A name search reads one layer; it says how old it is.
+            age = freshness.describe(freshness.ages(l0_store=l0))
         for hit in hits:
             print("%-6s %s" % (hit["kind"], hit["path"]))
         if not hits:
             print("no matches for %r in the catalogue" % args.query)
+        print(age)
         return 0
 
     if not args.project:
@@ -347,10 +368,12 @@ def cmd_search(args: argparse.Namespace) -> int:
                                          args.project), file=sys.stderr)
             return 1
         hits = search.content(store, args.query)
+        age = _ages(store)
     for hit in hits:
         print("%-8s %s" % (hit["where"], hit["path"]))
     if not hits:
         print("no matches for %r in %d indexed files" % (args.query, indexed))
+    print(age)
     return 0
 
 
@@ -376,6 +399,7 @@ def _semantic(args: argparse.Namespace, store_db: Path) -> int:
                       file=sys.stderr)
                 return 1
             hits = embed.search(store, args.query)
+            age = _ages(store)
         except embed.Refused as exc:
             print("REFUSED  %s" % exc, file=sys.stderr)
             return 2
@@ -384,6 +408,7 @@ def _semantic(args: argparse.Namespace, store_db: Path) -> int:
     if not hits:
         print("no matches for %r" % args.query)
     print("%d of %d chunks embedded" % (embedded, expected))
+    print(age)
     return 0
 
 
@@ -420,6 +445,7 @@ def _fused(args: argparse.Namespace, store_db: Path) -> int:
                        search.content(store, args.query, limit=fusion.DEPTH)]
             vector = [hit["path"] for hit in
                       embed.search(store, args.query, limit=fusion.DEPTH)]
+            age = _ages(store)
         except embed.Refused as exc:
             print("REFUSED  %s" % exc, file=sys.stderr)
             return 2
@@ -429,6 +455,7 @@ def _fused(args: argparse.Namespace, store_db: Path) -> int:
     if not hits:
         print("no matches for %r" % args.query)
     print("%d of %d chunks embedded" % (embedded, chunks))
+    print(age)
     return 0
 
 
@@ -486,16 +513,29 @@ def cmd_view(args: argparse.Namespace) -> int:
     out = Path(args.out).expanduser() if args.out else data_home() / "view" / project_id
     with Store(store_db, read_only=True) as store:
         root = store.get_meta("project_path") or ""
+        # The picture carries CP-12's freshness, from the same function the
+        # text answers use. Two views of one fact, never two computations of it.
+        if l0_path().is_file():
+            with Store(l0_path(), read_only=True, role=L0) as l0:
+                state = freshness.per_file(store, l0)
+                ages = freshness.ages(store, l0)
+        else:
+            state, ages = freshness.per_file(store), freshness.ages(store)
         try:
-            tally = view.write(store, root, out, Path(__file__).resolve().parent.parent / "view")
+            tally = view.write(store, root, out,
+                               Path(__file__).resolve().parent.parent / "view",
+                               state=state, ages=ages)
         except view.NothingToDraw as exc:
             print("REFUSED  %s -- morphofiles-graph update %s"
                   % (exc, args.project), file=sys.stderr)
             return 1
-    print("%s\n%d nodes, %d edges (%d folders, %d files, %d type buckets)\n"
+    print("%s\n%d nodes, %d edges (%d folders, %d files, %d type buckets)\n%s\n%s\n"
           "open it with:  python3 -m http.server --directory %s"
           % (out, tally["nodes"], tally["edges"], tally["dir"], tally["file"],
-             tally["bucket"], out))
+             tally["bucket"],
+             "  ".join("%s %d" % (name, count)
+                       for name, count in sorted(tally["states"].items())),
+             freshness.describe(ages), out))
     return 0
 
 
