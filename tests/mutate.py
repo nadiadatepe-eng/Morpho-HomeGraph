@@ -25,8 +25,16 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WIDTH = 52
 
-# Never copied into a mutation tree, by any harness.
-ALWAYS_IGNORED = ("__pycache__", ".git", ".venv")
+# Never copied into a mutation tree, by any harness. `node_modules` arrived
+# with CP-9 and weighs 252 MB: copying it once per mutation is gigabytes of
+# I/O to change one line of Python, and no mutation ever edits it.
+ALWAYS_IGNORED = ("__pycache__", ".git", ".venv", "node_modules")
+
+# ...which leaves the mutated tree without the embedding library, so the
+# driver says where the real one is. It belongs here rather than in a harness:
+# only the driver knows the unmutated tree, and a path written inside a test
+# would be one machine's home directory.
+os.environ.setdefault("MHG_NODE_MODULES", os.path.join(ROOT, "node_modules"))
 
 
 def run_suite(tree, test_file, timeout):

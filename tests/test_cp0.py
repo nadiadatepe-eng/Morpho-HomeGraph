@@ -218,8 +218,12 @@ def gates_store(tree):
         # of projects, of identical data). An equality rather than a subset,
         # so a table nobody declared shows up as a failure rather than as
         # nothing.
+        # `vectors` came with CP-9, and this equality is what made it visible
+        # here rather than in a later surprise: one line per checkpoint that
+        # declares a project-side table is the price of the gate working.
         check("1b a project store has exactly the tables projects declare",
-              tables == {"meta", "scope", "content", "edges"}, "tables=%s" % sorted(tables))
+              tables == {"meta", "scope", "content", "edges", "vectors"},
+              "tables=%s" % sorted(tables))
 
     guard = take(db, "2  migrating twice changes nothing")
     if guard is None:

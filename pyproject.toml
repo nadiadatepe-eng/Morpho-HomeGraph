@@ -3,10 +3,12 @@ name = "morpho-homegraph"
 version = "0.1.0"
 description = "Morpho-HomeGraph: metadata over everything, content where you point"
 requires-python = ">=3.12"
-# Zero runtime dependencies on the Python side, on purpose. The one dependency
-# in the project is `@xenova/transformers` on the npm side (locked decision 9),
-# and it arrives in CP-9, not here.
-dependencies = []
+# Two dependencies, both arriving with CP-9 and neither of them optional.
+# `@xenova/transformers` on the npm side is locked decision 9; `numpy` is
+# FASIT-cp9 R8 -- cosine over `float32` blobs, a full scan per query. Doing
+# that in pure Python would be the same arithmetic an order of magnitude
+# slower, which is a cost paid on every search rather than once at install.
+dependencies = ["numpy>=1.26"]
 
 [project.scripts]
 morphofiles-graph = "morpho_homegraph.cli:main"
@@ -17,3 +19,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["morpho_homegraph*"]
+
+# The embedding worker is JavaScript and lives inside the package, so it has
+# to be listed: a wheel that ships `embed.py` without `embed_worker.mjs`
+# installs a semantic layer that refuses on every run.
+[tool.setuptools.package-data]
+morpho_homegraph = ["*.mjs"]

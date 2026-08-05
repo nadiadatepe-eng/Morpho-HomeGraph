@@ -17,7 +17,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import content, graph, identity, scope, search, snapshot
+from . import content, embed, graph, identity, scope, search, snapshot
 from .lock import Locked, StoreLock
 from .scan import knows, scan
 from .store import (L0, Store, data_home, db_path, initialise, l0_path,
@@ -301,6 +301,12 @@ def cmd_search(args: argparse.Namespace) -> int:
     was never built looks exactly like zero hits from a corpus without the
     word, and only one of those is an answer.
     """
+    if args.names and args.semantic:
+        # Refused rather than resolved by order: `--names` reads L0's paths and
+        # `--semantic` reads a project's vectors, so whichever branch won would
+        # be answering a question the user did not ask, and looking right.
+        raise SystemExit("--names searches the catalogue's paths, --semantic "
+                         "searches one project's meaning: pick one")
     if args.names:
         if not l0_path().is_file():
             print("REFUSED  the catalogue has not been built: "
@@ -321,6 +327,8 @@ def cmd_search(args: argparse.Namespace) -> int:
     if not store_db.is_file():
         raise SystemExit("%s has no index yet: morphofiles-graph update %s"
                          % (args.project, args.project))
+    if args.semantic:
+        return _semantic(args, store_db)
     with Store(store_db, read_only=True) as store:
         condition, indexed, expected = search.state(store)
         if condition != "ok":
@@ -334,6 +342,74 @@ def cmd_search(args: argparse.Namespace) -> int:
         print("%-8s %s" % (hit["where"], hit["path"]))
     if not hits:
         print("no matches for %r in %d indexed files" % (args.query, indexed))
+    return 0
+
+
+def _semantic(args: argparse.Namespace, store_db: Path) -> int:
+    """Reader. Meaning rather than words, and always with its own coverage.
+
+    **The coverage line prints every time (CP-9 R9), and this is where CP-9
+    deliberately differs from CP-8.** A half-embedded project is the *normal*
+    state after R3, not an error -- so it answers. But nobody may read three
+    hits as "everything there is" without being told how far the run got.
+
+    Nothing embedded at all is the other case, and it is house rule 6 rather
+    than R9: a layer that was never built is missing, and zero hits from it is
+    not an answer. Exit 1, the same code CP-8 gives an index it cannot trust.
+    """
+    with Store(store_db, read_only=True) as store:
+        try:
+            embedded, expected = embed.coverage(store)
+            if not embedded:
+                print("REFUSED  nothing is embedded in this project yet (%d "
+                      "chunks in L2) -- morphofiles-graph embed %s. Answering "
+                      "would look like 'no matches'" % (expected, args.project),
+                      file=sys.stderr)
+                return 1
+            hits = embed.search(store, args.query)
+        except embed.Refused as exc:
+            print("REFUSED  %s" % exc, file=sys.stderr)
+            return 2
+    for hit in hits:
+        print("%.3f  %s" % (hit["score"], hit["path"]))
+    if not hits:
+        print("no matches for %r" % args.query)
+    print("%d of %d chunks embedded" % (embedded, expected))
+    return 0
+
+
+def cmd_embed(args: argparse.Namespace) -> int:
+    """Writer, and deliberately not part of `update` (CP-9 R3).
+
+    M-3 measured first-open embedding at 219.9 s and 317.1 s on two of the
+    smallest trees in the home area, against a 60-second threshold written
+    down before the measurement. So the design changed: `update` finishes
+    without it, the project is usable, CP-8 answers lexically, and this runs
+    when the user asks for it.
+
+    Every refusal exits 2 and names what is missing. A missing model must
+    never become a zero vector -- a semantic layer that answers badly without
+    saying so is the failure this whole checkpoint is about.
+    """
+    project_id = _resolve(args.project)
+    store_db = db_path(project_id)
+    if not store_db.is_file():
+        raise SystemExit("%s has no index yet: morphofiles-graph update %s"
+                         % (args.project, args.project))
+    barrier = _guard_or_refuse(store_db)
+    if barrier is None:
+        return 2
+    try:
+        with Store(store_db) as store:
+            tally = embed.build(store)
+    except embed.Refused as exc:
+        print("REFUSED  %s" % exc, file=sys.stderr)
+        return 2
+    finally:
+        barrier.release()
+    print("%s\n%d chunks embedded, %d reused, %d removed (%d chunks in L2)"
+          % (project_id, tally["embedded"], tally["reused"], tally["removed"],
+             tally["chunks"]))
     return 0
 
 
@@ -401,7 +477,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_search.add_argument("--project", help="project id or path")
     p_search.add_argument("--names", action="store_true",
                           help="search the catalogue's paths instead (whole home area)")
+    p_search.add_argument("--semantic", action="store_true",
+                          help="search by meaning, over the embedded chunks")
     p_search.set_defaults(func=cmd_search)
+
+    p_embed = sub.add_parser(
+        "embed", help="embed a project's content (its own command: M-3)")
+    p_embed.add_argument("project", help="project id or path")
+    p_embed.set_defaults(func=cmd_embed)
 
     p_snap = sub.add_parser("snapshot",
                             help="snapshot a project and prune the window")

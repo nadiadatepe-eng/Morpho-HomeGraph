@@ -475,7 +475,8 @@ def gates_shared_l0(tree):
             # what makes a table nobody declared show up as a failure -- it
             # has caught CP-2's `journal` and CP-3's `scope` already.
             check("16 a project store has no L0 table to fill by accident",
-                  tables == {"meta", "scope", "content", "edges"}, "tables=%s" % sorted(tables))
+                  tables == {"meta", "scope", "content", "edges", "vectors"},
+                  "tables=%s" % sorted(tables))
             # Refused rather than merely undeclared: without the check, a
             # caller that created the table first would be allowed to fill it.
             #

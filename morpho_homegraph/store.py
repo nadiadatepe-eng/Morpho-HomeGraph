@@ -30,7 +30,7 @@ from pathlib import Path
 
 from .lock import Unguarded, holds
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # Two roles, two schemas, and the split is the point. **L0 is shared**: it
 # describes the whole home area, it is identical for every project, and it
@@ -128,6 +128,25 @@ SCHEMA = {
               "  method TEXT NOT NULL,"
               "  confidence REAL NOT NULL,"
               "  PRIMARY KEY (src, dst, kind))"),
+    # CP-9: one row per embedded chunk. **Keyed on the content hash, never on
+    # the path** -- L2 is replaced whole by every `update` (CP-4), so a
+    # path-keyed vector would cost the entire embedding again each time, which
+    # M-3 measured at 3.5 to 5 minutes for a ~200-file project. With the hash,
+    # an update pays only for text that is actually new.
+    #
+    # The duty that comes with it: a vector whose hash has left `content` is
+    # deleted. A vector outliving its text ranks confidently for content that
+    # is gone.
+    #
+    # `ord` is the chunk's position in its text, so a hash with several chunks
+    # keeps them apart and in order. The blob is 384 float32, little-endian,
+    # exactly as numpy writes it -- see `embed.py`.
+    "vectors": (PROJECT,
+                "CREATE TABLE IF NOT EXISTS vectors ("
+                "  sha256 TEXT NOT NULL,"
+                "  ord INTEGER NOT NULL,"
+                "  vector BLOB NOT NULL,"
+                "  PRIMARY KEY (sha256, ord))"),
 }
 
 # Milliseconds a reader or writer waits on a locked SQLite page before giving
