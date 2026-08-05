@@ -68,7 +68,7 @@ MUTATIONS = [
 
     ("a file with no vector is called fresh",
      "morpho_homegraph/freshness.py",
-     "        elif any_vectors and sha not in embedded:\n"
+     "        elif any_vectors and has_text and sha not in embedded:\n"
      "            state[path] = UNEMBEDDED",
      "        elif False:  # mutated: embedded or not, who can tell\n"
      "            state[path] = UNEMBEDDED",
@@ -89,6 +89,12 @@ MUTATIONS = [
      '            "SELECT path, mtime_ns FROM files WHERE kind = \'file\'")}',
      '            "SELECT path, size FROM files WHERE kind = \'file\'")}  # mutated',
      "9  a project that is read, current and embedded is all fresh"),
+
+    ("an empty file is asked to be embedded",
+     "morpho_homegraph/freshness.py",
+     "        elif any_vectors and has_text and sha not in embedded:",
+     "        elif any_vectors and sha not in embedded:  # mutated",
+     "8b an empty file is fresh, because there is nothing to embed"),
 
     # -- the picture and the text are one fact (R7, R9) ---------------------
     ("the export drops the per-file state",

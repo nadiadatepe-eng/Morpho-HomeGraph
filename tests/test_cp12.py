@@ -61,6 +61,9 @@ def corpus(root):
           "for the whole session.\n")
     write(os.path.join(root, "notes.md"), "A short note about very little.\n")
     write(os.path.join(root, "handlers.py"), "def getUserById(conn):\n    return 1\n")
+    # Empty, and it stays empty: no chunk can ever come out of it, so calling
+    # it `unembedded` would be an instruction the reader cannot carry out.
+    write(os.path.join(root, "empty.log"), "")
     # Binary: this one can never be `fresh`, because it was never read.
     with open(os.path.join(root, "picture.bin"), "wb") as fh:
         fh.write(b"\x89PNG\x00\x00binary\x00bytes")
@@ -191,6 +194,13 @@ def gates_states(work, project_id):
     check("8  a file with no vector for its hash is unembedded",
           states.get("notes.md") == "unembedded",
           "notes.md is %s" % states.get("notes.md"))
+
+    # 8b: measured on this repository the first time the picture was drawn --
+    # 14 files came back `unembedded` and every one held zero characters. The
+    # label was true and unusable: it asked for a command that changes nothing.
+    check("8b an empty file is fresh, because there is nothing to embed",
+          states.get("empty.log") == "fresh",
+          "empty.log is %s" % states.get("empty.log"))
 
     check("10 the export carries the four states, named as the text names them",
           set(states.values()) <= {"fresh", "stale", "unread", "unembedded"}

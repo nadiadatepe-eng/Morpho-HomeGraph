@@ -19,6 +19,13 @@ every answer carries the catalogue's age beside the verdict: without it,
 `fresh`, `stale`, `unread`, `unembedded`. No confidence, no heuristic -- and
 the picture in CP-11 uses the same four, from the same export, so a colour can
 be traced back to a value someone can check.
+
+**An empty file is `fresh`, not `unembedded`.** Measured on this repository
+2026-08-05: 14 files came back `unembedded` and every one of them held zero
+characters -- `chunks_of("")` is `[]`, so no vector will ever exist for them.
+The label was true by the letter and useless in effect: it told the reader to
+run `embed`, which would change nothing. A state has to be one the reader can
+act on, or it is noise wearing a colour.
 """
 from __future__ import annotations
 
@@ -112,13 +119,14 @@ def per_file(store, l0_store=None) -> dict[str, str]:
             "SELECT path, mtime_ns FROM files WHERE kind = 'file'")}
 
     state = {}
-    for path, mtime_ns, sha, reason in store.db.execute(
-            "SELECT path, mtime_ns, sha256, reason FROM content"):
+    for path, mtime_ns, sha, reason, has_text in store.db.execute(
+            "SELECT path, mtime_ns, sha256, reason,"
+            " COALESCE(LENGTH(TRIM(text)), 0) > 0 FROM content"):
         if reason is not None:
             state[path] = UNREAD
         elif path in current and current[path] != mtime_ns:
             state[path] = STALE
-        elif any_vectors and sha not in embedded:
+        elif any_vectors and has_text and sha not in embedded:
             state[path] = UNEMBEDDED
         else:
             state[path] = FRESH
