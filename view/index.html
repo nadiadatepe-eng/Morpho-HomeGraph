@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- No markup is ever built from data: the script sets textContent and
+       draws to a canvas, so a filename containing a script tag stays a
+       filename. See `js/draw.js` and CP-11 R6.
+
+       `'wasm-unsafe-eval'` is required, not decoration: without it the browser
+       refuses `WebAssembly.compile` and the page stops at "could not draw".
+       No gate here can see that -- there is no browser in this harness -- so
+       it is written down where the next reader will find it. -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self'; connect-src 'self'">
+  <title>Morpho-HomeGraph</title>
+  <link rel="stylesheet" href="js/view.css">
+</head>
+<body>
+  <header>
+    <h1>Morpho-HomeGraph</h1>
+    <p id="status">starting…</p>
+  </header>
+  <canvas id="graph"></canvas>
+  <div id="hover" hidden></div>
+  <script type="module" src="js/draw.js"></script>
+</body>
+</html>

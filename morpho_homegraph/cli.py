@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import (content, embed, fusion, graph, identity, scope, search,
-               snapshot)
+               snapshot, view)
 from .lock import Locked, StoreLock
 from .scan import knows, scan
 from .store import (L0, Store, data_home, db_path, initialise, l0_path,
@@ -467,6 +467,38 @@ def cmd_embed(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_view(args: argparse.Namespace) -> int:
+    """Reader. Writes one self-contained folder: page, engine and data.
+
+    **It builds nothing.** An empty L2 is refused with the command that fills
+    it -- an empty picture and "your project is empty" look the same, and only
+    one of them is true.
+
+    The folder is self-contained because the alternative is a page that reaches
+    back into the repository for its JavaScript: that works on the machine it
+    was built on and nowhere else.
+    """
+    project_id = _resolve(args.project)
+    store_db = db_path(project_id)
+    if not store_db.is_file():
+        raise SystemExit("%s has no index yet: morphofiles-graph update %s"
+                         % (args.project, args.project))
+    out = Path(args.out).expanduser() if args.out else data_home() / "view" / project_id
+    with Store(store_db, read_only=True) as store:
+        root = store.get_meta("project_path") or ""
+        try:
+            tally = view.write(store, root, out, Path(__file__).resolve().parent.parent / "view")
+        except view.NothingToDraw as exc:
+            print("REFUSED  %s -- morphofiles-graph update %s"
+                  % (exc, args.project), file=sys.stderr)
+            return 1
+    print("%s\n%d nodes, %d edges (%d folders, %d files, %d type buckets)\n"
+          "open it with:  python3 -m http.server --directory %s"
+          % (out, tally["nodes"], tally["edges"], tally["dir"], tally["file"],
+             tally["bucket"], out))
+    return 0
+
+
 def cmd_snapshot(args: argparse.Namespace) -> int:
     """Writer. Takes one snapshot, then applies the retention window.
 
@@ -541,6 +573,11 @@ def build_parser() -> argparse.ArgumentParser:
         "embed", help="embed a project's content (its own command: M-3)")
     p_embed.add_argument("project", help="project id or path")
     p_embed.set_defaults(func=cmd_embed)
+
+    p_view = sub.add_parser("view", help="write the drawable graph and the page")
+    p_view.add_argument("project", help="project id or path")
+    p_view.add_argument("--out", help="where to write it (default: beside the store)")
+    p_view.set_defaults(func=cmd_view)
 
     p_snap = sub.add_parser("snapshot",
                             help="snapshot a project and prune the window")

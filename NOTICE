@@ -1,0 +1,27 @@
+This project includes files from morpho, Copyright Google LLC, licensed under
+the Apache License 2.0. The licence text is in `LICENSE-APACHE-2.0`.
+
+  Source: https://github.com/paradigms-of-intelligence/morpho
+  Commit: 3ff923f
+
+COPIED UNCHANGED. The sha256 of each file is recorded so that "unchanged"
+is a check rather than a claim -- `tests/test_cp11.py` gate 2 compares these
+against the files on disk, and gate 3 plants a modified byte to prove the
+comparison can fail.
+
+  bb87b5c3050492c4e3996da6ee27cf4b9b2fca97cf619e2416f56971c2286304  view/graphs_engine/main.wasm
+  3be7101103388eb1df621dc9d026cb5225c86079adaa16457aa202dc8d3636c2  view/graphs_engine/build.sh
+  67b7b5c57bd05482cdd510c124a8fb018f7e8af3c66947a3f010cade7d97c032  view/graphs_engine/src/main.c
+
+DERIVED, NOT COPIED. These are ours, written against the engine's exported
+functions and borrowing morpho's parameter names from `js/force_layout.js`:
+
+  view/js/layout.js
+
+PROVENANCE, INCLUDING ITS UNVERIFIED LINK. The three files above were copied
+from `~/morphofiles/graphs_engine`, a local project whose own NOTICE records
+morpho at commit 3ff923f and states the files were copied unchanged. This
+machine has no network access for the check, so the chain is recorded rather
+than verified against upstream: if the local copy had drifted from 3ff923f,
+nothing here would show it. Stated because a chain with an unverified link is
+a fact about the chain, not a detail to leave out.

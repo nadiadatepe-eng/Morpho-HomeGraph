@@ -1,0 +1,12 @@
+/* Kept in its own file rather than inline: the page's Content-Security-Policy
+   says style-src 'self', so a <style> block would be refused by the browser
+   itself. One rule, enforced by the runtime instead of by review. */
+body { margin: 0; font: 15px/1.4 system-ui, sans-serif; color: #222; background: #fbfbfa; }
+header { padding: .75rem 1rem .25rem; }
+h1 { margin: 0; font-size: 1.1rem; font-weight: 600; }
+#status { margin: .2rem 0 .5rem; color: #666; font-size: .85rem; }
+#graph { display: block; width: 100vw; height: calc(100vh - 4.5rem); }
+#hover { position: fixed; z-index: 10; pointer-events: none; max-width: 32rem;
+         background: #111; color: #fff; padding: .3rem .5rem; border-radius: .25rem;
+         font-size: .8rem; white-space: pre-wrap; word-break: break-all; }
+[hidden] { display: none; }
