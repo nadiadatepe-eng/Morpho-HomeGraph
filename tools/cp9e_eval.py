@@ -16,8 +16,9 @@ file inside the repository, and the repository *is* the corpus -- so without
 the cut every question would match verbatim in the file holding it. An answer
 sheet inside the exam.
 
-**The fusion lives here, not in the product.** CP-10 decides what the command
-does; this only has to answer whether the vector list contributes.
+**The fusion is imported from the package (CP-10).** It was written here
+first, because CP-9E ran before the product had one -- and a tool that owns
+what it measures grades itself. These numbers are about the merge that ships.
 
     python3 tools/cp9e_eval.py [path-to-repo]
 """
@@ -33,6 +34,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SET_PATH = os.path.join(REPO, "tests", "gold", "eval-cp9e.json")
 
+# **The fusion is imported, not owned.** It lived here first, because CP-9E ran
+# before the product had one -- and a tool that owns the thing it measures
+# grades itself. CP-10 moved it into the package, so these numbers are about
+# the merge that ships. `RRF_K`, `DEPTH` and `CUT` come from the same place for
+# the same reason: a constant copied here could drift from the one in use, and
+# then the recall figure would be about neither.
+from morpho_homegraph.fusion import (CUT, DEPTH, RRF_K, fuse,  # noqa: E402
+                                     rrf_scores)
+
 # Every file that holds questions, cut out of the corpus before it is graded
 # (R7). The set is the obvious one. **The harness is the one that is not:** it
 # plants questions of its own to prove the validator can refuse, and those
@@ -40,19 +50,6 @@ SET_PATH = os.path.join(REPO, "tests", "gold", "eval-cp9e.json")
 # them perfectly. Found 2026-08-05 by a gate that could not fail -- a planted
 # nonsense question was found lexically, in the file that planted it.
 QUESTION_FILES = ("eval-cp9e.json", "test_cp9e.py")
-
-# RRF's constant, and the reason it is written here rather than tuned: at
-# k = 60 one list's rank-1 contribution is 1/61 while two neighbouring ranks
-# differ by 0.000264, so any list that is added decides everything it touches
-# (measured, `rrf-k60-one-list-decides-everything`). A different k would make
-# this number about a different merge.
-RRF_K = 60
-
-# How deep each layer is asked before the lists are merged and cut to ten.
-# Deeper than the ten that are scored, because a hit at rank 12 in one list
-# can be pulled into the top ten by the other -- that is what fusion is for.
-DEPTH = 50
-CUT = 10
 
 
 class BrokenSet(RuntimeError):
@@ -147,36 +144,6 @@ def found(ranked: list[str], targets: list[str], cut: int = CUT) -> bool:
     return any(target in ranked[:cut] for target in targets)
 
 
-def rrf_scores(lists: list[list[str]], k: int = RRF_K) -> dict[str, float]:
-    """`{file: score}` for reciprocal rank fusion. `1 / (k + rank)`, rank from 1.
-
-    Separate from the ordering below so a gate can pin the *arithmetic*, not
-    only the winner. An order test is nearly blind here: a uniform shift of
-    every rank changes each score and almost never the sequence, so "1/(k+r)"
-    and "1/(k+r-1)" look identical from the outside (measured 2026-08-05 --
-    the mutation for it survived until this function existed).
-    """
-    score: dict[str, float] = {}
-    for ranked in lists:
-        for position, path in enumerate(ranked, start=1):
-            score[path] = score.get(path, 0.0) + 1.0 / (k + position)
-    return score
-
-
-def rrf(lists: list[list[str]], k: int = RRF_K) -> list[str]:
-    """The fused order. Ties broken by best rank, then by name.
-
-    Two identical runs must merge to an identical order -- one that drifts is
-    one no measurement can hold.
-    """
-    score = rrf_scores(lists, k)
-    best: dict[str, int] = {}
-    for ranked in lists:
-        for position, path in enumerate(ranked, start=1):
-            best[path] = min(best.get(path, position), position)
-    return sorted(score, key=lambda p: (-score[p], best[p], p))
-
-
 def score(pairs: list[dict], fts_of, vector_of) -> dict:
     """`{class: {layer: (hits, total)}}` plus the per-pair detail.
 
@@ -190,7 +157,8 @@ def score(pairs: list[dict], fts_of, vector_of) -> dict:
     for pair in pairs:
         lexical = fts_of(pair["query"])
         vector = vector_of(pair["query"])
-        fused = rrf([lexical, vector])
+        fused = [hit["path"] for hit in
+                 fuse({"lexical": lexical, "vector": vector})]
         row = {"id": pair["id"], "class": pair["class"],
                "fts": found(lexical, pair["targets"]),
                "vector": found(vector, pair["targets"]),

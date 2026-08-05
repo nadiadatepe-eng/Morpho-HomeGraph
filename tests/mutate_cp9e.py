@@ -10,12 +10,19 @@ Two are the controls. "the validator accepts anything" is what gates 4, 6 and
 8 would be satisfied by if 5 and 7 were not there, and "every pair scores a
 hit" is what the whole table would be satisfied by without gate 16.
 
-"rank counted from zero" is the one worth reading twice. It survived the
-first sweep and looked like an equivalent mutant: at k = 60 a uniform shift
-changes every score and almost never the order, so no ordering gate can see
-it. That was true of the *gate*, not of the code -- the fix was to expose the
-scores and pin them, and the mutation dies on arithmetic instead. An
-"equivalent mutant" is sometimes a test that only looks at the wrong end.
+**The fusion's own mutations are not here: they moved to `mutate_cp10.py`
+with the code.** CP-9E measured a merge that lived in its measuring tool, and
+CP-10 put it in the package. Gates 13, 14 and 14b still exercise it through
+the tool, and CP-10's sweep is what proves they can fail -- one mechanism, one
+owner. Two copies of a needle drift, and then the sweep proves whichever copy
+it happens to read.
+
+One of those three is worth reading twice. "rank counted from zero" survived
+the first sweep and looked like an equivalent mutant: at k = 60 a uniform
+shift changes every score and almost never the order, so no ordering gate can
+see it. That was true of the *gate*, not of the code -- exposing the scores
+and pinning them kills it on arithmetic. An "equivalent mutant" is sometimes a
+test that only looks at the wrong end.
 
 Run:
     python3 tests/mutate_cp9e.py
@@ -110,31 +117,11 @@ MUTATIONS = [
      "12 a pair with several targets is found by any one of them"),
 
     # -- the fusion (R9) ---------------------------------------------------
-    ("the fusion constant is not the one it was measured for",
-     "tools/cp9e_eval.py",
-     "RRF_K = 60",
-     "RRF_K = 5  # mutated: another merge entirely",
-     "13 RRF is 1/(k + rank) with k = 60, rank counted from one"),
-
-    ("rank is counted from zero",
-     "tools/cp9e_eval.py",
-     "        for position, path in enumerate(ranked, start=1):\n"
-     "            score[path] = score.get(path, 0.0) + 1.0 / (k + position)",
-     "        for position, path in enumerate(ranked):  # mutated\n"
-     "            score[path] = score.get(path, 0.0) + 1.0 / (k + position)",
-     "13 RRF is 1/(k + rank) with k = 60, rank counted from one"),
-
     ("the fusion keeps only the lexical list",
      "tools/cp9e_eval.py",
      "        fused = rrf([lexical, vector])",
      "        fused = lexical  # mutated: the vector list is dropped",
      "14b a file only the vector list found reaches the fused answer"),
-
-    ("a list contributes its position rather than its reciprocal",
-     "tools/cp9e_eval.py",
-     "            score[path] = score.get(path, 0.0) + 1.0 / (k + position)",
-     "            score[path] = score.get(path, 0.0) + position  # mutated",
-     "13 RRF is 1/(k + rank) with k = 60, rank counted from one"),
 
     ("an empty second list reverses the first",
      "tools/cp9e_eval.py",

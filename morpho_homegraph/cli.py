@@ -17,7 +17,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import content, embed, graph, identity, scope, search, snapshot
+from . import (content, embed, fusion, graph, identity, scope, search,
+               snapshot)
 from .lock import Locked, StoreLock
 from .scan import knows, scan
 from .store import (L0, Store, data_home, db_path, initialise, l0_path,
@@ -301,12 +302,18 @@ def cmd_search(args: argparse.Namespace) -> int:
     was never built looks exactly like zero hits from a corpus without the
     word, and only one of those is an answer.
     """
-    if args.names and args.semantic:
-        # Refused rather than resolved by order: `--names` reads L0's paths and
-        # `--semantic` reads a project's vectors, so whichever branch won would
-        # be answering a question the user did not ask, and looking right.
-        raise SystemExit("--names searches the catalogue's paths, --semantic "
-                         "searches one project's meaning: pick one")
+    # Two answer modes at once is a command that did not run, so it exits 2
+    # rather than 1 -- the split this file's docstring sets out. Resolving it
+    # by branch order would answer a question the user did not ask, and look
+    # right while doing it.
+    if args.semantic and args.fused:
+        print("REFUSED  --semantic answers from the vectors alone and --fused "
+              "merges both lists: pick one", file=sys.stderr)
+        return 2
+    if args.names and (args.semantic or args.fused):
+        print("REFUSED  --names searches the catalogue's paths; --semantic and "
+              "--fused search one project: pick one", file=sys.stderr)
+        return 2
     if args.names:
         if not l0_path().is_file():
             print("REFUSED  the catalogue has not been built: "
@@ -327,6 +334,8 @@ def cmd_search(args: argparse.Namespace) -> int:
     if not store_db.is_file():
         raise SystemExit("%s has no index yet: morphofiles-graph update %s"
                          % (args.project, args.project))
+    if args.fused:
+        return _fused(args, store_db)
     if args.semantic:
         return _semantic(args, store_db)
     with Store(store_db, read_only=True) as store:
@@ -375,6 +384,51 @@ def _semantic(args: argparse.Namespace, store_db: Path) -> int:
     if not hits:
         print("no matches for %r" % args.query)
     print("%d of %d chunks embedded" % (embedded, expected))
+    return 0
+
+
+def _fused(args: argparse.Namespace, store_db: Path) -> int:
+    """Reader. Both lists, merged on rank, and each hit says which found it.
+
+    **A fusion with one list is not a fusion (CP-10 R6).** If either layer is
+    missing this refuses and names the command that fixes it, because
+    answering with the surviving list would look exactly like a working merge
+    -- the silent degradation house rule 6 exists for.
+
+    **Opt-in, not the default.** CP-9E decided that with numbers rather than
+    taste: paraphrase and lexical cleared their thresholds, cross-language
+    landed in the band, and the rule written before the measurement says
+    measure again before switching anything on.
+    """
+    with Store(store_db, read_only=True) as store:
+        condition, indexed, expected = search.state(store)
+        if condition != "ok":
+            print("REFUSED  the lexical index is %s (%d rows, %d in L2) -- "
+                  "morphofiles-graph update %s. Half a fusion is not one"
+                  % (condition, indexed, expected, args.project),
+                  file=sys.stderr)
+            return 1
+        try:
+            embedded, chunks = embed.coverage(store)
+            if not embedded:
+                print("REFUSED  nothing is embedded in this project yet (%d "
+                      "chunks in L2) -- morphofiles-graph embed %s. Half a "
+                      "fusion is not one" % (chunks, args.project),
+                      file=sys.stderr)
+                return 1
+            lexical = [hit["path"] for hit in
+                       search.content(store, args.query, limit=fusion.DEPTH)]
+            vector = [hit["path"] for hit in
+                      embed.search(store, args.query, limit=fusion.DEPTH)]
+        except embed.Refused as exc:
+            print("REFUSED  %s" % exc, file=sys.stderr)
+            return 2
+    hits = fusion.fuse({"lexical": lexical, "vector": vector})
+    for hit in hits[:fusion.CUT]:
+        print("%-8s %s" % (fusion.route(hit["found_by"]), hit["path"]))
+    if not hits:
+        print("no matches for %r" % args.query)
+    print("%d of %d chunks embedded" % (embedded, chunks))
     return 0
 
 
@@ -479,6 +533,8 @@ def build_parser() -> argparse.ArgumentParser:
                           help="search the catalogue's paths instead (whole home area)")
     p_search.add_argument("--semantic", action="store_true",
                           help="search by meaning, over the embedded chunks")
+    p_search.add_argument("--fused", action="store_true",
+                          help="merge the lexical and semantic lists on rank")
     p_search.set_defaults(func=cmd_search)
 
     p_embed = sub.add_parser(

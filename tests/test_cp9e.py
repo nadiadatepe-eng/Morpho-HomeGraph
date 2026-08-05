@@ -66,7 +66,8 @@ def gates_scoring():
     # other, so 1/61. Pinning the order alone was not enough -- a uniform
     # shift of every rank changes every score and almost never the sequence,
     # and the mutation for it survived until the scores were exposed.
-    fused = E.rrf([["a", "x", "b"], ["c", "x", "d"]])
+    fused = [hit["path"] for hit in
+             E.fuse({"lexical": ["a", "x", "b"], "vector": ["c", "x", "d"]})]
     scores = E.rrf_scores([["a", "x", "b"], ["c", "x", "d"]])
     check("13 RRF is 1/(k + rank) with k = 60, rank counted from one",
           E.RRF_K == 60 and fused[0] == "x"
@@ -78,9 +79,10 @@ def gates_scoring():
     # 14: the control that stops 13 from being satisfied by "return the first
     # list". An empty second list must leave the first one's order alone.
     only_fts = ["a", "b", "c"]
+    alone = [hit["path"] for hit in
+             E.fuse({"lexical": only_fts, "vector": []})]
     check("14 an empty vector list leaves the lexical order untouched",
-          E.rrf([only_fts, []]) == only_fts,
-          "%s" % E.rrf([only_fts, []]))
+          alone == only_fts, "%s" % alone)
 
     # 14b: the other direction, and the one R8 is about. A file only the
     # vector list knows must reach the fused answer -- otherwise "fusion" is

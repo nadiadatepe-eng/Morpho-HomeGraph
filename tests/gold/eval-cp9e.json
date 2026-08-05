@@ -26,7 +26,7 @@
     {"id": "A09", "class": "A", "query": "what stops the catalogue from walking round in circles for ever", "targets": ["morpho_homegraph/scan.py"]},
     {"id": "A10", "class": "A", "query": "how long is a reader allowed to wait for a page somebody else has taken", "targets": ["morpho_homegraph/store.py"]},
     {"id": "A11", "class": "A", "query": "which folder on disk holds everything the tool writes down", "targets": ["morpho_homegraph/store.py"]},
-    {"id": "A12", "class": "A", "query": "how does an answer say which of the two routes produced it", "targets": ["morpho_homegraph/search.py"]},
+    {"id": "A12", "class": "A", "query": "how can a reader tell whether the words matched the prose or the broken-up name", "targets": ["morpho_homegraph/search.py"]},
     {"id": "A13", "class": "A", "query": "what keeps odd punctuation in a question from breaking the lookup", "targets": ["morpho_homegraph/search.py"]},
     {"id": "A14", "class": "A", "query": "how is a long job picked up again after somebody interrupts it halfway", "targets": ["morpho_homegraph/embed.py"]},
     {"id": "A15", "class": "A", "query": "what makes a repeat run almost free", "targets": ["morpho_homegraph/embed.py"]},
