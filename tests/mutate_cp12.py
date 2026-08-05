@@ -43,11 +43,12 @@ MUTATIONS = [
      "    pass  # mutated: the most expensive layer has no clock",
      "3  a semantic search says the vectors' age as well"),
 
-    ("only the layer that was read is reported, never the others",
+    ("every layer is reported as never built",
      "morpho_homegraph/freshness.py",
-     "        found[name] = _age(source.get_meta(key), now)",
+     "        found[name] = _age(source.get_meta(key), now) if source is not None \\\n"
+     "            else UNOPENED",
      "        found[name] = None  # mutated: every layer is 'never'",
-     "5  the age is printed even when every layer is fresh"),
+     "19 every layer is named, including one that was not read"),
 
     # -- the four states (R5) -----------------------------------------------
     ("a file that was never read is called fresh",
@@ -60,7 +61,8 @@ MUTATIONS = [
 
     ("a file changed after the update is still called fresh",
      "morpho_homegraph/freshness.py",
-     "        elif path in current and current[path] != mtime_ns:\n"
+     "        elif have_catalogue and (path not in current\n"
+     "                                 or current[path] != mtime_ns):\n"
      "            state[path] = STALE",
      "        elif False:  # mutated: our copy is always current\n"
      "            state[path] = STALE",
@@ -68,7 +70,7 @@ MUTATIONS = [
 
     ("a file with no vector is called fresh",
      "morpho_homegraph/freshness.py",
-     "        elif any_vectors and has_text and sha not in embedded:\n"
+     "        elif has_text and sha not in embedded:\n"
      "            state[path] = UNEMBEDDED",
      "        elif False:  # mutated: embedded or not, who can tell\n"
      "            state[path] = UNEMBEDDED",
@@ -92,8 +94,8 @@ MUTATIONS = [
 
     ("an empty file is asked to be embedded",
      "morpho_homegraph/freshness.py",
-     "        elif any_vectors and has_text and sha not in embedded:",
-     "        elif any_vectors and sha not in embedded:  # mutated",
+     "        elif has_text and sha not in embedded:",
+     "        elif sha not in embedded:  # mutated",
      "8b an empty file is fresh, because there is nothing to embed"),
 
     # -- the picture and the text are one fact (R7, R9) ---------------------
@@ -122,18 +124,66 @@ MUTATIONS = [
      "  // mutated: the state nobody can see",
      "12 the page draws by state, explains each one, and uses no markup"),
 
+    # -- what an outside reader measured, 2026-08-05 ------------------------
+    ("a project with no vectors calls everything fresh again",
+     "morpho_homegraph/freshness.py",
+     "        elif has_text and sha not in embedded:",
+     "        elif embedded and has_text and sha not in embedded:  # mutated",
+     "17 with no vectors at all, a text file is unembedded, not fresh"),
+
+    ("a file gone from the catalogue is fresh again",
+     "morpho_homegraph/freshness.py",
+     "        elif have_catalogue and (path not in current\n"
+     "                                 or current[path] != mtime_ns):",
+     "        elif path in current and current[path] != mtime_ns:  # mutated",
+     "18 a file the open catalogue no longer holds is stale, not fresh"),
+
+    ("a layer nobody opened disappears from the line",
+     "morpho_homegraph/freshness.py",
+     "        found[name] = _age(source.get_meta(key), now) if source is not None \\\n"
+     "            else UNOPENED",
+     "        if source is None:  # mutated: absence carries the message\n"
+     "            continue\n"
+     "        found[name] = _age(source.get_meta(key), now)",
+     "19 every layer is named, including one that was not read"),
+
+    ("an unreadable stamp is reported as never built",
+     "morpho_homegraph/freshness.py",
+     "        return UNREADABLE",
+     "        return NEVER  # mutated: two facts, one word",
+     "20 an unreadable stamp is not reported as never built"),
+
+    ("timestamps are written without their zone again",
+     "morpho_homegraph/cli.py",
+     "    return datetime.now().astimezone().isoformat(timespec=\"seconds\")",
+     "    return datetime.now().isoformat(timespec=\"seconds\")  # mutated",
+     "21 the stamp the command writes carries its offset, and travels"),
+
+    ("an unknown state is silently added as a fifth",
+     "morpho_homegraph/freshness.py",
+     "        counted[value if value in counted else \"?\"] = \\\n"
+     "            counted.get(value if value in counted else \"?\", 0) + 1",
+     "        counted[value] = counted.get(value, 0) + 1  # mutated",
+     "22 a state nobody defined is counted, not quietly added as a fifth"),
+
+    ("every negative age shouts about the clocks",
+     "morpho_homegraph/freshness.py",
+     "    if seconds < -1.0:",
+     "    if seconds < 0:  # mutated: a microsecond is a clock failure",
+     "23 a hair from the future is 0 s, a real jump still warns"),
+
     # -- the words (R1, and the clock) --------------------------------------
     ("a small age is printed as nothing at all",
      "morpho_homegraph/freshness.py",
      '    if seconds < 90:\n'
-     '        return "%d s" % int(seconds)',
+     '        return "%d s" % int(max(seconds, 0))',
      '    if seconds < 90:\n'
      '        return ""  # mutated: fresh enough to say nothing',
      "14 an age reads as a human says it, and zero is not empty"),
 
     ("an age from the future is printed as a negative number",
      "morpho_homegraph/freshness.py",
-     "    if seconds < 0:",
+     "    if seconds < -1.0:",
      "    if False:  # mutated: let the minus sign explain itself",
      "16 an age from the future is said in words, not as a negative"),
 ]

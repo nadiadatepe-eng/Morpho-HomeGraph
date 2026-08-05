@@ -22,6 +22,8 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -73,10 +75,10 @@ def corpus(root):
 # -- 14, 16: the words the ages are said in --------------------------------
 
 def gates_wording():
-    said = [freshness.human(v) for v in (0, 45, 200, 7200, 3 * 86400, None, -5)]
+    said = [freshness.human(v) for v in (0, 45, 200, 7200, 3 * 86400, None, -30)]
     check("14 an age reads as a human says it, and zero is not empty",
           said[:5] == ["0 s", "45 s", "3 min", "2 h", "3 d"]
-          and said[5] == "never",
+          and said[5] == freshness.NEVER,
           "%s" % said[:6])
 
     # 16: only reachable when the clocks disagree -- the catalogue stamped
@@ -101,6 +103,11 @@ def gates_answers(work):
               "update exited %s: %s" % (built.returncode, built.stderr[:60]))
         return None
     embedded = cli("embed", project_id)
+    # The stamp the *command* wrote, kept for gate 21: a stamp the test builds
+    # itself proves nothing about what the writer does.
+    from morpho_homegraph.store import Store, db_path
+    with Store(db_path(project_id), read_only=True) as store:
+        STAMPS["last_update"] = store.get_meta("last_update") or ""
 
     names = cli("search", "--names", "barrier")
     check("1  a name search says how old the catalogue is",
@@ -257,6 +264,101 @@ def gates_legend():
           % (sorted(defined), "STATE_COLOURS[node.state]" in code))
 
 
+# -- 17 til 23: funnet av en ekstern leser, 2026-08-05 --------------------
+
+STAMPS = {}
+
+
+def gates_from_review():
+    """The seven Orchestrator (the `claude` account) measured in this module.
+
+    Every one is a state that was true by the definition and misleading to a
+    reader -- the exact form I asked her to hunt for. Reproduced here first,
+    then fixed; these gates are what stops them coming back.
+    """
+    import sqlite3
+
+    class Fake:
+        """The smallest thing that satisfies the surface: `.db` and meta."""
+
+        def __init__(self, meta=None):
+            self.db = sqlite3.connect(":memory:")
+            self.db.executescript(
+                "CREATE TABLE files (path TEXT PRIMARY KEY, kind TEXT,"
+                " size INT, mtime_ns INT, inode INT, dev INT, content_hash TEXT);"
+                "CREATE TABLE content (path TEXT PRIMARY KEY, size INT,"
+                " mtime_ns INT, sha256 TEXT, text TEXT, reason TEXT);"
+                "CREATE TABLE vectors (sha256 TEXT, ord INT, vector BLOB,"
+                " PRIMARY KEY (sha256, ord));")
+            self._meta = meta or {}
+
+        def get_meta(self, key):
+            return self._meta.get(key)
+
+    store, l0 = Fake(), Fake()
+    l0.db.execute("INSERT INTO files VALUES ('a.md','file',1,100,1,1,NULL)")
+    store.db.execute("INSERT INTO content VALUES ('a.md',1,100,'h1','tekst',NULL)")
+    check("17 with no vectors at all, a text file is unembedded, not fresh",
+          set(freshness.per_file(store, l0).values()) == {"unembedded"},
+          "%s" % sorted(set(freshness.per_file(store, l0).values())))
+
+    gone, empty_l0 = Fake(), Fake()
+    gone.db.execute("INSERT INTO content VALUES ('x.md',1,100,'h9','t',NULL)")
+    gone.db.execute("INSERT INTO vectors VALUES ('h9',0,x'00')")
+    check("18 a file the open catalogue no longer holds is stale, not fresh",
+          freshness.per_file(gone, empty_l0) == {"x.md": "stale"},
+          "%s" % freshness.per_file(gone, empty_l0))
+
+    # 19: R2 one level up. A layer that was never opened used to vanish from
+    # the line, so absence carried the message -- the failure this whole
+    # checkpoint exists to end.
+    partial = freshness.ages(Fake({"last_update": "900"}), None, now=1000)
+    check("19 every layer is named, including one that was not read",
+          sorted(partial) == ["catalogue", "content", "vectors"]
+          and partial["catalogue"] == freshness.UNOPENED
+          and "layer not read" in freshness.describe(partial),
+          "%s" % freshness.describe(partial))
+
+    junk = freshness.ages(Fake({"last_update": "ikke-en-dato"}), Fake(), now=1000)
+    check("20 an unreadable stamp is not reported as never built",
+          junk["content"] == freshness.UNREADABLE
+          and junk["catalogue"] == freshness.NEVER
+          and freshness.human(junk["content"]) != freshness.human(junk["catalogue"]),
+          "content %r, catalogue %r"
+          % (freshness.human(junk["content"]), freshness.human(junk["catalogue"])))
+
+    # 21: the same naive string is 7200 s apart between two zones, and Oslo's
+    # own offset moves an hour between January and August (measured
+    # 2026-08-05). A stamp that carries its offset survives both.
+    now = time.time()
+    with_zone = datetime.fromtimestamp(now).astimezone().isoformat(timespec="seconds")
+    aged = freshness.ages(Fake({"last_update": with_zone}), Fake(), now=now)
+    other_zone = datetime.fromtimestamp(now, ZoneInfo("Pacific/Auckland")).isoformat(
+        timespec="seconds")
+    travelled = freshness.ages(Fake({"last_update": other_zone}), Fake(), now=now)
+    written = STAMPS.get("last_update", "")
+    # `.get` and the isinstance: a mutation that drops the numbers leaves a
+    # word here, and a harness that raises on it names no gate.
+    seconds = [aged.get("content"), travelled.get("content")]
+    check("21 the stamp the command writes carries its offset, and travels",
+          all(isinstance(v, float) and abs(v) < 2 for v in seconds)
+          and re.search(r"[+-]\d{2}:\d{2}$|Z$", written) is not None,
+          "written %r, ages %s" % (written[-6:], seconds))
+
+    check("22 a state nobody defined is counted, not quietly added as a fifth",
+          freshness.tally({"x.md": "tull"}).get("?") == 1
+          and set(freshness.tally({})) == {"fresh", "stale", "unread", "unembedded"},
+          "%s" % freshness.tally({"x.md": "tull"}))
+
+    # 23: a stamp written microseconds after the clock was read comes back a
+    # shade negative. Shouting "the clocks disagree" in the ordinary case
+    # teaches the reader to ignore the shout.
+    check("23 a hair from the future is 0 s, a real jump still warns",
+          freshness.human(-0.4) == "0 s"
+          and "future" in freshness.human(-30),
+          "%r / %r" % (freshness.human(-0.4), freshness.human(-30)))
+
+
 def main() -> int:
     gates_wording()
     gates_legend()
@@ -264,6 +366,9 @@ def main() -> int:
         project_id = gates_answers(work)
         if project_id:
             gates_states(work, project_id)
+    # After the commands have run: gate 21 reads the stamp the *writer* wrote,
+    # and a stamp the test builds itself would prove nothing about the writer.
+    gates_from_review()
 
     failed = [n for n, ok, _ in results if not ok]
     print("\n%d/%d checks passed" % (len(results) - len(failed), len(results)))

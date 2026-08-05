@@ -146,6 +146,19 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _stamp() -> str:
+    """Now, with the offset written down.
+
+    A naive ISO stamp is read as local time, which is what wrote it -- until
+    the store is read in another zone, or on the other side of a daylight
+    saving change. Measured 2026-08-05: the same naive string is 7200 s apart
+    between UTC and Europe/Oslo, and Oslo's own offset moves an hour between
+    January and August. Old stamps keep the only reading they ever had; new
+    ones carry their zone.
+    """
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
 def _ages(store=None) -> str:
     """The line every answer ends with: how old is each layer it read (R1).
 
@@ -255,8 +268,7 @@ def cmd_update(args: argparse.Namespace) -> int:
             # saying that is the whole of what this branch does.
             root = store.get_meta("project_path")
             if not root:
-                store.set_meta("last_update",
-                               datetime.now().isoformat(timespec="seconds"))
+                store.set_meta("last_update", _stamp())
                 print("%s  index recreated, but it has no recorded path: "
                       "morphofiles-graph add <dir> to register it again"
                       % project_id)
@@ -292,8 +304,7 @@ def cmd_update(args: argparse.Namespace) -> int:
                 l2 = content.build(store, l0, chosen)
                 l3 = graph.build(store, scope_root=root)
                 l4 = search.build(store)
-            store.set_meta("last_update",
-                           datetime.now().isoformat(timespec="seconds"))
+            store.set_meta("last_update", _stamp())
     finally:
         barrier.release()
 
