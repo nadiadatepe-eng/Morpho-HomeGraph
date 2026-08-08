@@ -78,9 +78,17 @@ MUTATIONS = [
      "4b the service says it is holding the guards before it sweeps"),
 
     # -- an update never triggers itself (R2) ------------------------------
+    # **Aimed at the holders rule, not at `relevant`, and that is a finding.**
+    # CP-15 added the directory check because the journal reports the store's
+    # own *directories* as changed and `relevant` only knows the db file and
+    # its `-wal`/`.lock` siblings. Every store file lives alone in its own
+    # directory, so the directory rule now subsumes the file rule -- mutating
+    # `relevant` alone changes nothing and survived a sweep on 2026-08-08.
+    # `relevant` stays as the belt for a layout where a store shares a
+    # directory with corpus files; the braces are what this mutation cuts.
     ("store writes are treated as corpus changes",
      "morpho_homegraph/service.py",
-     "        if not relevant(path, ignore):\n"
+     "        if any(path == d or path.startswith(d + os.sep) for d in holders):\n"
      "            return False",
      "        if False:  # mutated: the service reacts to its own writes\n"
      "            return False",
@@ -198,7 +206,7 @@ MUTATIONS = [
      "                for _p, _r in watched:  # mutated: broad does narrow\n"
      "                    _update(_p, _r, out)\n"
      "                next_sweep = clock() + sweep_seconds",
-     "13 CONTROL: the sweep does not build any project's layers"),
+     "13 CONTROL: a second sweep over a settled corpus builds nothing"),
 
     # -- fragmentation (R6) ------------------------------------------------
     ("VACUUM never runs, so the store grows with use",
