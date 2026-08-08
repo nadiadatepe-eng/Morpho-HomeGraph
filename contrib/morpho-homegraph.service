@@ -1,0 +1,47 @@
+# Morpho-HomeGraph's indexing service. CP-13B.
+#
+# THE WAY BACK, first in the file on purpose:
+#
+#     systemctl --user stop morpho-homegraph      # for now
+#     systemctl --user disable morpho-homegraph   # for good
+#
+# While this runs it is the ONLY writer (locked decision 12), so
+# `scan` by hand, and `update` against a watched project, are REFUSED and exit
+# 2. That is the design, not a fault -- but a decision with no documented way
+# back is a trap, so it is written down before anything else.
+#
+# Install (user scope; no root, nothing outside $HOME):
+#
+#     mkdir -p ~/.config/systemd/user
+#     cp contrib/morpho-homegraph.service ~/.config/systemd/user/
+#     systemctl --user daemon-reload
+#     systemctl --user enable --now morpho-homegraph
+#
+# Autostart survives logout only with lingering, which is a system-level flag:
+#
+#     loginctl show-user "$USER" -p Linger      # Linger=yes if it does
+#
+# No absolute home path appears below -- `%h` is systemd's own specifier for
+# it. A unit file that names one machine is a unit file that gets shared
+# unedited (CP-13B R7, and CP-PUB's gate against real paths).
+
+[Unit]
+Description=Morpho-HomeGraph indexing service (one writer, two clocks)
+
+[Service]
+Type=simple
+# The package is not pip-installed, so `-m` needs the repo as the working
+# directory. Changing one of these two lines without the other is how this
+# unit starts failing at the next reboot rather than now.
+WorkingDirectory=%h/Morpho-HomeGraph
+ExecStart=/usr/bin/python3 -m morpho_homegraph.cli serve
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=30
+# Exit 2 is "another process owns writing to this store" -- a refusal, not a
+# crash. Retrying it every 30 seconds would fight a person who started `serve`
+# in a terminal, for ever, and fill the journal while doing it.
+RestartPreventExitStatus=2
+
+[Install]
+WantedBy=default.target

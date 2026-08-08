@@ -158,7 +158,40 @@ def _ages(store=None) -> str:
     return freshness.describe(freshness.ages(store))
 
 
-def _guard_or_refuse(store_db: Path) -> StoreLock | None:
+# CP-13B R3/R4: one row per refusal that actually happened. M-4 used to ask
+# "how often does the barrier refuse under real use" by staging a collision
+# from cron every hour; with CP-13 there is one permanent writer, so that cron
+# would have refused itself every time and filled the series with ones. What
+# is worth counting now is how often *a person* wants to write while the
+# service holds the guard -- and that is exactly here, where the refusal is.
+REFUSALS = "refusals.tsv"
+
+
+def _record_refusal(command: str, store_db: Path, holder: dict) -> None:
+    """Append one row about a refusal that just happened. Never raises.
+
+    **R5, and it is the rule that matters most here:** a measurement may not
+    block the thing it measures. An unwritable tally, a full disk, a directory
+    where the file should be -- the refusal still happens, still exits 2, and
+    still names the holder. Anything else turns an instrument into a second
+    failure mode, on the path that is already the unhappy one.
+
+    **R6, the denominator:** the holder's pid is in the row. Without it a row
+    cannot be told from a row about ourselves, and a zero with no denominator
+    is not a measurement -- the lesson M-4 was designed around.
+    """
+    try:
+        path = data_home() / REFUSALS
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write("%s\t%s\t%s\t%s\n"
+                     % (service.stamp(), command, store_db,
+                        holder.get("pid", "?")))
+    except OSError:
+        pass
+
+
+def _guard_or_refuse(store_db: Path, command: str) -> StoreLock | None:
     """The guard, or None with the refusal already printed to stderr.
 
     One function for both writers rather than the same six lines in each.
@@ -171,6 +204,9 @@ def _guard_or_refuse(store_db: Path) -> StoreLock | None:
     Three facts, because a caller can act on all three and on none of a
     message that says only "busy": who holds it, that they own writing, and
     that there is no queue and no hand-off to ask for.
+
+    `command` is passed rather than read off `sys.argv`, so the row says which
+    command was refused even when the CLI is driven as a library.
     """
     try:
         return _guard(store_db)
@@ -178,6 +214,7 @@ def _guard_or_refuse(store_db: Path) -> StoreLock | None:
         print("REFUSED  %s\n(waiting is not offered, and asking that process "
               "to do the job is not built: re-run when it is done)" % exc,
               file=sys.stderr)
+        _record_refusal(command, store_db, exc.holder)
         return None
 
 
@@ -191,7 +228,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
     """
     store_db = l0_path()
     store_db.parent.mkdir(parents=True, exist_ok=True)
-    barrier = _guard_or_refuse(store_db)
+    barrier = _guard_or_refuse(store_db, "scan")
     if barrier is None:
         return 2
     try:
@@ -224,7 +261,7 @@ def cmd_update(args: argparse.Namespace) -> int:
     # CP-0 gate 8b requires that a *refused* writer leaves no store behind, and
     # opening one is already a write. It also puts every check inside the same
     # guard as the writes they decide on.
-    barrier = _guard_or_refuse(store_db)
+    barrier = _guard_or_refuse(store_db, "update")
     if barrier is None:
         return 2
     try:
@@ -262,7 +299,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
     """
     project_id = _resolve(args.project)
     store_db = db_path(project_id)
-    barrier = _guard_or_refuse(store_db)
+    barrier = _guard_or_refuse(store_db, "watch")
     if barrier is None:
         return 2
     try:
@@ -466,7 +503,7 @@ def cmd_embed(args: argparse.Namespace) -> int:
     if not store_db.is_file():
         raise SystemExit("%s has no index yet: morphofiles-graph update %s"
                          % (args.project, args.project))
-    barrier = _guard_or_refuse(store_db)
+    barrier = _guard_or_refuse(store_db, "embed")
     if barrier is None:
         return 2
     try:
@@ -548,7 +585,8 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
         raise SystemExit("%s has no index to snapshot: morphofiles-graph "
                          "update %s" % (args.project, args.project))
     path = snapshot.take(project_id)
-    barrier = _guard_or_refuse(Path(snapshot.prune_guard(project_id)))
+    barrier = _guard_or_refuse(Path(snapshot.prune_guard(project_id)),
+                               "snapshot")
     if barrier is None:
         return 2
     try:

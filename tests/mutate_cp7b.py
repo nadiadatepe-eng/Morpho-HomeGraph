@@ -158,7 +158,7 @@ MUTATIONS = [
      # same three lines, it comes first in the file, and `replace(..., 1)`
      # would land there instead -- where no CP-7B gate is looking. That is the
      # two-copies trap `cli.py` documents on `_guard_or_refuse` itself.
-     "    barrier = _guard_or_refuse(store_db)\n"
+     "    barrier = _guard_or_refuse(store_db, \"update\")\n"
      "    if barrier is None:\n"
      "        return 2\n"
      "    try:\n"

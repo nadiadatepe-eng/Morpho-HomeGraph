@@ -54,7 +54,7 @@ MUTATIONS = [
      # drives. Without that, `replace(..., 1)` lands wherever the file happens
      # to define first, which is the two-copies trap `cli.py` documents on
      # `_guard_or_refuse` itself.
-     "    barrier = _guard_or_refuse(store_db)\n"
+     "    barrier = _guard_or_refuse(store_db, \"update\")\n"
      "    if barrier is None:\n"
      "        return 2\n"
      "    try:\n"
@@ -62,7 +62,7 @@ MUTATIONS = [
      "            try:\n"
      "                built = service.build_layers(store, project_id)",
      "    import sqlite3; sqlite3.connect(store_db).close()  # mutated\n"
-     "    barrier = _guard_or_refuse(store_db)\n"
+     "    barrier = _guard_or_refuse(store_db, \"update\")\n"
      "    if barrier is None:\n"
      "        return 2\n"
      "    try:\n"
