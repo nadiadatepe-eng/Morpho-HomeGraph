@@ -228,6 +228,19 @@ def gates_guards(work):
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.communicate()
+    # **The child outlives a killed suite, and that is not hypothetical.**
+    # This `finally` covers every way the suite *returns*; it covers none of
+    # the ways it is *killed* -- and a mutation run that hits its timeout is
+    # killed. Three `serve` processes were found alive on 2026-08-08 with
+    # their temp stores long deleted, from runs that had been stopped that
+    # way. Harmless in themselves, but a service that outlives its suite holds
+    # guards and confuses every later process check.
+    #
+    # Not fixed with a signal handler here on purpose: the reliable form is
+    # for the *driver* to kill the process group, which is a change to
+    # `mutate.py` and therefore a change to every harness. Written down rather
+    # than half-done -- `pgrep -af 'morpho_homegraph.cli serve /tmp/'` finds
+    # them, and they die with a plain `kill`.
     check("20 CONTROL: a normal start and Ctrl-C exits 0",
           proc.returncode == 0, "rc=%s" % proc.returncode)
     # 17b, and it is weaker than it looks on its own: the kernel drops a dead
