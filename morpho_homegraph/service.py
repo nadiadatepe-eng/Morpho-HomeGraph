@@ -362,6 +362,7 @@ def serve(*, scan_root: str = "~", sweep_seconds: float = SWEEP_SECONDS,
                  for pid, path in watched}
         roots = sorted(((path, pid) for pid, path in watched),
                        key=lambda pair: len(pair[0]), reverse=True)
+        paths = dict(watched)
 
         next_sweep = clock()
         done = 0
@@ -388,7 +389,7 @@ def serve(*, scan_root: str = "~", sweep_seconds: float = SWEEP_SECONDS,
                     break
                 hits |= more
             for pid in sorted(hits):
-                path = dict(watched)[pid]
+                path = paths[pid]
                 _update(pid, path, out)
                 # The scope may be exactly what changed (R4), so the predicate
                 # that decides the *next* burst is rebuilt from the tree we
