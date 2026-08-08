@@ -158,12 +158,18 @@ MUTATIONS = [
     # -- the coverage line (R9 of CP-9, one layer up) ----------------------
     ("the fused answer stops saying how much is embedded",
      "morpho_homegraph/cli.py",
+     # CP-12 put `print(age)` between these two lines, and this needle went
+     # from mutating the coverage line to matching nothing at all -- scored as
+     # a survivor, in a report that said 0. `python3 tests/mutate.py` is the
+     # check that now catches that in seconds.
      '    print("%d of %d chunks embedded" % (embedded, chunks))\n'
+     "    print(age)\n"
      "    return 0\n"
      "\n"
      "\n"
      "def cmd_embed",
-     "    return 0  # mutated: no coverage line\n"
+     "    print(age)  # mutated: no coverage line\n"
+     "    return 0\n"
      "\n"
      "\n"
      "def cmd_embed",

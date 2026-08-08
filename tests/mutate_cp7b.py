@@ -27,42 +27,41 @@ MUTATIONS = [
     # edges and exits 0. "No links in this project" and "the graph ran too
     # early" are the same output.
     ("the graph is built before the content it reads",
-     "morpho_homegraph/cli.py",
-     "                l2 = content.build(store, l0, chosen)\n"
-     "                l3 = graph.build(store, scope_root=root)",
-     "                l3 = graph.build(store, scope_root=root)  # mutated\n"
-     "                l2 = content.build(store, l0, chosen)",
+     "morpho_homegraph/service.py",
+     "        l2 = content.build(store, l0, chosen)\n"
+     "        l3 = graph.build(store, scope_root=root)",
+     "        l3 = graph.build(store, scope_root=root)  # mutated\n"
+     "        l2 = content.build(store, l0, chosen)",
      "2  the graph has edges, so it ran after the content"),
 
     ("the content layer is never built",
-     "morpho_homegraph/cli.py",
-     "                l2 = content.build(store, l0, chosen)",
-     "                l2 = {\"read\": 0, \"unread\": 0}  # mutated",
+     "morpho_homegraph/service.py",
+     "        l2 = content.build(store, l0, chosen)",
+     "        l2 = {\"read\": 0, \"unread\": 0}  # mutated",
      "1  update fills scope, L2 and L3 in one command"),
 
     ("the graph layer is never built",
-     "morpho_homegraph/cli.py",
-     "                l3 = graph.build(store, scope_root=root)",
-     "                l3 = {\"edges\": 0, \"ambiguous\": 0, \"outside\": 0}"
+     "morpho_homegraph/service.py",
+     "        l3 = graph.build(store, scope_root=root)",
+     "        l3 = {\"edges\": 0, \"ambiguous\": 0, \"outside\": 0}"
      "  # mutated",
      "1  update fills scope, L2 and L3 in one command"),
 
     ("the scope is never saved, so no reader can see what was used",
-     "morpho_homegraph/cli.py",
-     "                scope.save(store, chosen)",
-     "                pass  # mutated: the scope stays in this process",
+     "morpho_homegraph/service.py",
+     "        scope.save(store, chosen)",
+     "        pass  # mutated: the scope stays in this process",
      "13 the scope used is saved, and loads back with the same answers"),
 
     # -- the scope is recomputed, never reused (R6) ------------------------
     ("the saved scope is loaded and reused instead of recomputed",
-     "morpho_homegraph/cli.py",
-     "                chosen = _chosen_scope(root)",
-     "                chosen = scope.load(store) or _chosen_scope(root)"
-     "  # mutated",
+     "morpho_homegraph/service.py",
+     "        chosen = chosen_scope(root)",
+     "        chosen = scope.load(store) or chosen_scope(root)  # mutated",
      "11 editing .gitignore between runs changes what L2 holds"),
 
     ("every folder is treated as a repo, so JUNK is never excluded",
-     "morpho_homegraph/cli.py",
+     "morpho_homegraph/service.py",
      "    if scope.is_repo(root):\n"
      "        chosen, _patterns = scope.from_repo(root)\n"
      "        return chosen\n"
@@ -72,7 +71,7 @@ MUTATIONS = [
      "10 a folder without .git excludes the junk directories"),
 
     ("every folder is treated as a plain folder, so .gitignore is ignored",
-     "morpho_homegraph/cli.py",
+     "morpho_homegraph/service.py",
      "    if scope.is_repo(root):\n"
      "        chosen, _patterns = scope.from_repo(root)\n"
      "        return chosen\n"
@@ -82,31 +81,30 @@ MUTATIONS = [
 
     # -- L0 is read, never built here (R2) ---------------------------------
     ("update takes the L0 guard as well, so a scan blocks every update",
-     "morpho_homegraph/cli.py",
-     "            with Store(l0_path(), read_only=True, role=L0) as l0:",
-     "            _l0_guard = _guard(l0_path())  # mutated: one writer\n"
-     "            with Store(l0_path(), read_only=True, role=L0) as l0:",
+     "morpho_homegraph/service.py",
+     "    with Store(l0_path(), read_only=True, role=L0) as l0:",
+     "    _l0_guard = StoreLock(str(l0_path())).acquire()  # mutated: one writer\n"
+     "    with Store(l0_path(), read_only=True, role=L0) as l0:",
      "3  update succeeds while another process holds the L0 guard"),
 
     # -- an empty layer always has a reason, and it is said out loud (R3) --
     ("a catalogue that has never seen the project is used anyway",
-     "morpho_homegraph/cli.py",
+     "morpho_homegraph/service.py",
      "        if not knows(l0, root):",
      "        if False:  # mutated: index it empty and exit 0",
      "5  an L0 that does not know the project root is refused"),
 
     ("a missing catalogue is treated as an empty one",
-     "morpho_homegraph/cli.py",
+     "morpho_homegraph/service.py",
      "    if not l0_path().is_file():",
      "    if False:  # mutated",
      "4  a missing L0 is refused, naming the command that builds it"),
 
     ("the refusal does not name the command that builds the catalogue",
-     "morpho_homegraph/cli.py",
-     "                print(\"REFUSED  the catalogue has not been built: \"\n"
-     "                      \"morphofiles-graph scan\", file=sys.stderr)",
-     "                print(\"REFUSED  nothing to do here\","
-     " file=sys.stderr)  # mutated",
+     "morpho_homegraph/service.py",
+     "        raise Refused(\"the catalogue has not been built: \"\n"
+     "                      \"morphofiles-graph scan\")",
+     "        raise Refused(\"nothing to do here\")  # mutated",
      "4  a missing L0 is refused, naming the command that builds it"),
 
     # The control's own mutation. `knows` answering no to everything refuses
@@ -128,32 +126,29 @@ MUTATIONS = [
 
     # -- moved and deleted (R4, R5) ----------------------------------------
     ("a moved project is rebuilt at its old path instead of being refused",
-     "morpho_homegraph/cli.py",
-     "                    root = identity.open_project(project_id, l0)\n"
-     "                except identity.Moved as exc:\n"
-     "                    print(\"REFUSED  %s\" % exc, file=sys.stderr)\n"
-     "                    return 2",
-     "                    root = identity.open_project(project_id, l0)\n"
-     "                except identity.Moved:  # mutated: use the old path\n"
-     "                    pass",
+     "morpho_homegraph/service.py",
+     "            root = identity.open_project(project_id, l0)\n"
+     "        except identity.Moved as exc:\n"
+     "            raise Refused(str(exc)) from exc",
+     "            root = identity.open_project(project_id, l0)\n"
+     "        except identity.Moved:  # mutated: use the old path\n"
+     "            pass",
      "7  a moved project is refused, naming where it went, nothing written"),
 
     ("a project marked deleted is updated like any other",
-     "morpho_homegraph/cli.py",
-     "        if (store.get_meta(\"state\") or identity.LIVING)"
+     "morpho_homegraph/service.py",
+     "    if (store.get_meta(\"state\") or identity.LIVING)"
      " != identity.LIVING:",
-     "        if False:  # mutated: deleted is just a label",
+     "    if False:  # mutated: deleted is just a label",
      "8  a deleted project is refused, and the refusal names the way back"),
 
     ("the deleted refusal does not name the way back",
-     "morpho_homegraph/cli.py",
-     "                print(\"REFUSED  %s is marked deleted and is waiting to"
-     " be \"\n"
-     "                      \"retired -- restore it first (see"
-     " snapshot.restore)\"\n"
-     "                      % project_id, file=sys.stderr)",
-     "                print(\"REFUSED  %s is marked deleted\" % project_id,\n"
-     "                      file=sys.stderr)  # mutated",
+     "morpho_homegraph/service.py",
+     "        raise Refused(\"%s is marked deleted and is waiting to be"
+     " retired -- \"\n"
+     "                      \"restore it first (see snapshot.restore)\""
+     " % project_id)",
+     "        raise Refused(\"%s is marked deleted\" % project_id)  # mutated",
      "8  a deleted project is refused, and the refusal names the way back"),
 
     # -- the guard (R9) ----------------------------------------------------
@@ -167,10 +162,14 @@ MUTATIONS = [
      "    if barrier is None:\n"
      "        return 2\n"
      "    try:\n"
-     "        with Store(store_db) as store:",
+     "        with Store(store_db) as store:\n"
+     "            try:\n"
+     "                built = service.build_layers(store, project_id)",
      "    barrier = _guard(store_db)  # mutated: no refusal path\n"
      "    try:\n"
-     "        with Store(store_db) as store:",
+     "        with Store(store_db) as store:\n"
+     "            try:\n"
+     "                built = service.build_layers(store, project_id)",
      "16 a second update on the same project is refused, not queued"),
 
     # -- what a reader can see (R8) ----------------------------------------
@@ -196,13 +195,11 @@ MUTATIONS = [
      "14 status shows the layers, so an empty index cannot look finished"),
 
     ("update stops recording when it last ran",
-     "morpho_homegraph/cli.py",
-     "            store.set_meta(\"last_update\",\n"
-     "                           datetime.now().isoformat("
-     "timespec=\"seconds\"))\n"
-     "    finally:",
-     "            pass  # mutated: no timestamp\n"
-     "    finally:",
+     "morpho_homegraph/service.py",
+     "    store.set_meta(\"last_update\", stamp())\n"
+     "    return {\"recreated\": False,",
+     "    pass  # mutated: no timestamp\n"
+     "    return {\"recreated\": False,",
      "17 update records last_update and the per-layer counts"),
 ]
 

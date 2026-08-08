@@ -199,7 +199,13 @@ MUTATIONS = [
 
     ("a project with no vectors answers 'no matches'",
      "morpho_homegraph/cli.py",
+     # `if not embedded:` alone is in `_semantic` and in `_fused`, and
+     # `replace(..., 1)` would take whichever comes first. The line above it
+     # differs by one name (`expected` against `chunks`), and gate 19 is
+     # `_semantic`'s.
+     "            embedded, expected = embed.coverage(store)\n"
      "            if not embedded:",
+     "            embedded, expected = embed.coverage(store)\n"
      "            if False:  # mutated: silence instead of a refusal",
      "19 a project with no vectors refuses instead of finding nothing"),
 
@@ -215,10 +221,10 @@ MUTATIONS = [
 
     # -- embedding is its own command (R3) ---------------------------------
     ("update embeds as well, so the open blocks again",
-     "morpho_homegraph/cli.py",
-     "                l4 = search.build(store)",
-     "                l4 = search.build(store)\n"
-     "                embed.build(store)  # mutated: M-3's 219.9 s at open",
+     "morpho_homegraph/service.py",
+     "        l4 = search.build(store)",
+     "        l4 = search.build(store)\n"
+     "        embed.build(store)  # mutated: M-3's 219.9 s at open",
      "15 update fills L2, L3 and L4 and does not embed"),
 
     ("the embed command does not embed",

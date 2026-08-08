@@ -14,13 +14,11 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime
 from pathlib import Path
 
-from . import (content, embed, freshness, fusion, graph, identity, scope,
-               search, snapshot, view)
+from . import embed, freshness, fusion, search, service, snapshot, view
 from .lock import Locked, StoreLock
-from .scan import knows, scan
+from .scan import scan
 from .store import (L0, Store, data_home, db_path, initialise, l0_path,
                     new_project, projects)
 
@@ -146,19 +144,6 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
-def _stamp() -> str:
-    """Now, with the offset written down.
-
-    A naive ISO stamp is read as local time, which is what wrote it -- until
-    the store is read in another zone, or on the other side of a daylight
-    saving change. Measured 2026-08-05: the same naive string is 7200 s apart
-    between UTC and Europe/Oslo, and Oslo's own offset moves an hour between
-    January and August. Old stamps keep the only reading they ever had; new
-    ones carry their zone.
-    """
-    return datetime.now().astimezone().isoformat(timespec="seconds")
-
-
 def _ages(store=None) -> str:
     """The line every answer ends with: how old is each layer it read (R1).
 
@@ -219,100 +204,93 @@ def cmd_scan(args: argparse.Namespace) -> int:
     return 0
 
 
-def _chosen_scope(root: str):
-    """The scope this folder gets: `.gitignore` for a repo, JUNK otherwise.
-
-    Recomputed on every update and never loaded from the store. A saved scope
-    that is reused is CP-3's bug in new clothing -- patterns worked out and
-    never applied -- because `.gitignore` gets edited and a folder becomes a
-    repo (CP-7B R6).
-    """
-    if scope.is_repo(root):
-        chosen, _patterns = scope.from_repo(root)
-        return chosen
-    return scope.from_folder(root)
-
-
 def cmd_update(args: argparse.Namespace) -> int:
     """Writer. Builds this project's own layers: scope, then L2, then L3.
 
-    **The order is not taste (R1).** `graph.build` reads `content`, so a graph
-    built first finds nothing to link, writes zero edges and *succeeds* -- and
-    "no links in this project" and "the graph ran too early" are then the same
-    output.
+    **The work is `service.build_layers`, and that is CP-13 R10.** The guard,
+    the refusal text and the exit code are this command's; what an update *is*
+    belongs to one function, because the service builds the same layers under
+    a guard it already holds and `StoreLock.acquire` would refuse a second
+    take in the same process (see `_guard`). Two build paths would have been
+    two answers to what `update` does, and the second one is the one nobody
+    reads.
 
-    **L0 is read, never built here (R2).** It is a different store with its own
-    guard and its own command. Taking that guard as well would let a project
-    update block every catalogue refresh, and the two writers locked decision
-    12 rests on would have become one.
-
-    Every refusal below exits 2 and names the command that fixes it: an index
-    that is empty for a reason nobody can see is this checkpoint's whole
-    subject.
+    Every refusal exits 2 and names the command that fixes it: an index that
+    is empty for a reason nobody can see is CP-7B's whole subject.
     """
     project_id = _resolve(args.project)
     store_db = db_path(project_id)
     # The guard before anything else, including before the store is opened:
     # CP-0 gate 8b requires that a *refused* writer leaves no store behind, and
-    # opening one is already a write. It also puts every check below inside the
-    # same guard as the writes they decide on.
+    # opening one is already a write. It also puts every check inside the same
+    # guard as the writes they decide on.
     barrier = _guard_or_refuse(store_db)
     if barrier is None:
         return 2
     try:
         with Store(store_db) as store:
-            # CP-0's recovery path, and it must stay reachable: a project whose
-            # `index.db` was deleted is recreated by this command -- `status`
-            # says so in as many words. The path it was for lived in the file
-            # that is gone, so the layers cannot be rebuilt from here, and
-            # saying that is the whole of what this branch does.
-            root = store.get_meta("project_path")
-            if not root:
-                store.set_meta("last_update", _stamp())
-                print("%s  index recreated, but it has no recorded path: "
-                      "morphofiles-graph add <dir> to register it again"
-                      % project_id)
-                return 0
-            if (store.get_meta("state") or identity.LIVING) != identity.LIVING:
-                print("REFUSED  %s is marked deleted and is waiting to be "
-                      "retired -- restore it first (see snapshot.restore)"
-                      % project_id, file=sys.stderr)
+            try:
+                built = service.build_layers(store, project_id)
+            except service.Refused as exc:
+                print("REFUSED  %s" % exc, file=sys.stderr)
                 return 2
-            if not l0_path().is_file():
-                print("REFUSED  the catalogue has not been built: "
-                      "morphofiles-graph scan", file=sys.stderr)
-                return 2
-
-            with Store(l0_path(), read_only=True, role=L0) as l0:
-                try:
-                    # R4: the old location is refused with where it went, not
-                    # quietly rebuilt somewhere else. Applying the move is
-                    # deliberately a different act -- CP-6 refuses to choose
-                    # between two identical trees, and this command would be
-                    # choosing for the user.
-                    root = identity.open_project(project_id, l0)
-                except identity.Moved as exc:
-                    print("REFUSED  %s" % exc, file=sys.stderr)
-                    return 2
-                if not knows(l0, root):
-                    print("REFUSED  the catalogue has never seen %s -- it is "
-                          "older than this project: morphofiles-graph scan"
-                          % root, file=sys.stderr)
-                    return 2
-                chosen = _chosen_scope(root)
-                scope.save(store, chosen)
-                l2 = content.build(store, l0, chosen)
-                l3 = graph.build(store, scope_root=root)
-                l4 = search.build(store)
-            store.set_meta("last_update", _stamp())
     finally:
         barrier.release()
 
+    if built["recreated"]:
+        # CP-0's recovery path, and it must stay reachable: a project whose
+        # `index.db` was deleted is recreated here -- `status` says so in as
+        # many words. The path it was for lived in the file that is gone.
+        print("%s  index recreated, but it has no recorded path: "
+              "morphofiles-graph add <dir> to register it again" % project_id)
+        return 0
+    l2, l3, l4 = built["l2"], built["l3"], built["l4"]
     print("%s  %s\nL2  %d read, %d unread\nL3  %d edges (%d ambiguous, "
           "%d outside)\nL4  %d rows indexed"
-          % (project_id, root, l2["read"], l2["unread"], l3["edges"],
+          % (project_id, built["root"], l2["read"], l2["unread"], l3["edges"],
              l3["ambiguous"], l3["outside"], l4["rows"]))
     return 0
+
+
+def cmd_watch(args: argparse.Namespace) -> int:
+    """Writer. Arm or disarm inotify for one project (CP-13 R3).
+
+    A command rather than a flag on `add`, because a flag on `add` would be
+    dead on this machine from the day it was written: the one real project
+    (`3247e1fc8204aa01`) was registered on 2026-08-04, and nothing that only
+    happens at registration can ever reach it.
+    """
+    project_id = _resolve(args.project)
+    store_db = db_path(project_id)
+    barrier = _guard_or_refuse(store_db)
+    if barrier is None:
+        return 2
+    try:
+        with Store(store_db) as store:
+            service.set_watch(store, not args.off)
+            root = store.get_meta("project_path") or "(no recorded path)"
+    finally:
+        barrier.release()
+    print("%s  %s  %s" % (project_id, "unwatched" if args.off else "watched",
+                          root))
+    return 0
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    """The service. Holds every guard it needs and blocks until Ctrl-C.
+
+    Exit 2 when a guard is refused -- another process is already the writer,
+    and this one does not queue behind it any more than `update` does.
+    """
+    try:
+        return service.serve(scan_root=args.root,
+                             sweep_seconds=args.sweep * 60,
+                             debounce=args.debounce)
+    except KeyboardInterrupt:
+        # The guards are already released: `serve` releases in a `finally`, so
+        # by the time this lands there is nothing left to undo (R9).
+        print("stopped")
+        return 0
 
 
 def cmd_search(args: argparse.Namespace) -> int:
@@ -634,6 +612,26 @@ def build_parser() -> argparse.ArgumentParser:
                             help="snapshot a project and prune the window")
     p_snap.add_argument("project", help="project id or path")
     p_snap.set_defaults(func=cmd_snapshot)
+
+    p_watch = sub.add_parser("watch", help="arm inotify for a project")
+    p_watch.add_argument("project", help="project id or path")
+    p_watch.add_argument("--off", action="store_true",
+                         help="disarm it again")
+    p_watch.set_defaults(func=cmd_watch)
+
+    p_serve = sub.add_parser(
+        "serve", help="the indexing service: sweep L0, react to watched projects")
+    p_serve.add_argument("root", nargs="?", default="~",
+                         help="what the sweep catalogues (default: the home area)")
+    p_serve.add_argument("--sweep", type=float,
+                         default=service.SWEEP_SECONDS / 60,
+                         help="minutes between full L0 sweeps (default: %d)"
+                              % (service.SWEEP_SECONDS / 60))
+    p_serve.add_argument("--debounce", type=float,
+                         default=service.DEBOUNCE_SECONDS,
+                         help="seconds of quiet that end a burst (default: %.1f)"
+                              % service.DEBOUNCE_SECONDS)
+    p_serve.set_defaults(func=cmd_serve)
     return parser
 
 

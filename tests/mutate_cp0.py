@@ -49,17 +49,26 @@ MUTATIONS = [
 
     ("the store file is created before the barrier",
      "morpho_homegraph/cli.py",
+     # `update`, `watch` and `embed` now open with the same five lines, so the
+     # needle reaches one line further into `cmd_update` -- the one gate 8b
+     # drives. Without that, `replace(..., 1)` lands wherever the file happens
+     # to define first, which is the two-copies trap `cli.py` documents on
+     # `_guard_or_refuse` itself.
      "    barrier = _guard_or_refuse(store_db)\n"
      "    if barrier is None:\n"
      "        return 2\n"
      "    try:\n"
-     "        with Store(store_db) as store:",
+     "        with Store(store_db) as store:\n"
+     "            try:\n"
+     "                built = service.build_layers(store, project_id)",
      "    import sqlite3; sqlite3.connect(store_db).close()  # mutated\n"
      "    barrier = _guard_or_refuse(store_db)\n"
      "    if barrier is None:\n"
      "        return 2\n"
      "    try:\n"
-     "        with Store(store_db) as store:",
+     "        with Store(store_db) as store:\n"
+     "            try:\n"
+     "                built = service.build_layers(store, project_id)",
      "8b a refused writer creates no store"),
 
     # -- the refusal has to be a fact the caller can act on --------------

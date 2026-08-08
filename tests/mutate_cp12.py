@@ -154,7 +154,7 @@ MUTATIONS = [
      "20 an unreadable stamp is not reported as never built"),
 
     ("timestamps are written without their zone again",
-     "morpho_homegraph/cli.py",
+     "morpho_homegraph/service.py",
      "    return datetime.now().astimezone().isoformat(timespec=\"seconds\")",
      "    return datetime.now().isoformat(timespec=\"seconds\")  # mutated",
      "21 the stamp the command writes carries its offset, and travels"),

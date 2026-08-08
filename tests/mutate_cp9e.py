@@ -117,16 +117,23 @@ MUTATIONS = [
      "12 a pair with several targets is found by any one of them"),
 
     # -- the fusion (R9) ---------------------------------------------------
+    # Both of these pointed at `tools/cp9e_eval.py` until 2026-08-08, and had
+    # matched nothing since CP-10 moved the fusion into the package -- the
+    # evaluator now calls `fusion.fuse` instead of carrying its own `rrf`.
+    # Two mutations scored as survivors inside a report that printed 0.
     ("the fusion keeps only the lexical list",
      "tools/cp9e_eval.py",
-     "        fused = rrf([lexical, vector])",
+     '        fused = [hit["path"] for hit in\n'
+     '                 fuse({"lexical": lexical, "vector": vector})]',
      "        fused = lexical  # mutated: the vector list is dropped",
      "14b a file only the vector list found reaches the fused answer"),
 
     ("an empty second list reverses the first",
-     "tools/cp9e_eval.py",
-     "    return sorted(score, key=lambda p: (-score[p], best[p], p))",
-     "    return sorted(score, key=lambda p: (score[p], best[p], p))  # mutated",
+     "morpho_homegraph/fusion.py",
+     "            for path in sorted(score, key=lambda p:"
+     " (-score[p], best[p], p))]",
+     "            for path in sorted(score, key=lambda p:"
+     " (score[p], best[p], p))]  # mutated",
      "14 an empty vector list leaves the lexical order untouched"),
 
     # -- the report (R2), and the control that stops it being decoration ---

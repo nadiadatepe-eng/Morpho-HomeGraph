@@ -68,9 +68,9 @@ MUTATIONS = [
      "16 a file removed from L2 is gone from the hits after update"),
 
     ("update stops building the search layer",
-     "morpho_homegraph/cli.py",
-     "                l4 = search.build(store)",
-     '                l4 = {"rows": 0}  # mutated',
+     "morpho_homegraph/service.py",
+     "        l4 = search.build(store)",
+     '        l4 = {"rows": 0}  # mutated',
      "15 update builds L4: search.build has a caller in the package"),
 
     # -- an index that cannot answer says so (R6) --------------------------
@@ -99,8 +99,12 @@ MUTATIONS = [
 
     ("the command answers anyway when the index cannot",
      "morpho_homegraph/cli.py",
-     "        if condition != \"ok\":",
-     "        if False:  # mutated: answer regardless",
+     "        if condition != \"ok\":\n"
+     "            print(\"REFUSED  the search index is %s (%d rows indexed,"
+     " %d in \"",
+     "        if False:  # mutated: answer regardless\n"
+     "            print(\"REFUSED  the search index is %s (%d rows indexed,"
+     " %d in \"",
      "9  a missing index reports and exits 1, not zero hits"),
 
     # -- the query is text, not syntax (R8) --------------------------------
@@ -148,11 +152,13 @@ MUTATIONS = [
     # -- a reader takes no guard (R9) --------------------------------------
     ("search takes the write guard, so an indexing run blocks it",
      "morpho_homegraph/cli.py",
-     "    with Store(store_db, read_only=True) as store:\n"
-     "        condition, indexed, expected = search.state(store)",
+     "    if args.semantic:\n"
+     "        return _semantic(args, store_db)\n"
+     "    with Store(store_db, read_only=True) as store:",
+     "    if args.semantic:\n"
+     "        return _semantic(args, store_db)\n"
      "    _held = _guard(store_db)  # mutated: a reader that locks\n"
-     "    with Store(store_db, read_only=True) as store:\n"
-     "        condition, indexed, expected = search.state(store)",
+     "    with Store(store_db, read_only=True) as store:",
      "14 search answers while another process holds the project guard"),
 ]
 

@@ -13,6 +13,20 @@ A harness uses it like this, and otherwise owns only its `MUTATIONS` list:
     from mutate import run
     if __name__ == "__main__":
         sys.exit(run(MUTATIONS, "test_cp0.py", prefix="mut0-", timeout=600))
+
+Run this file directly to audit every harness's needles against the current
+source in seconds:
+
+    python3 tests/mutate.py
+
+**Why that mode exists, measured 2026-08-08:** 4 of 309 needles no longer
+matched the source they named. CP-10 moved the fusion into the package and
+left CP-9E's two needles pointing at `tools/cp9e_eval.py`; CP-12 edited the
+two lines CP-7B and CP-10 had pinned. `run()` scores a missing needle as a
+survivor, which is right -- but only after the full sweep, and the sweep is
+900 s per harness. So the recorded "0 survivors" in `TODO.md` stayed true on
+the page and false on disk for three days. A check that costs seconds is one
+that gets run.
 """
 from __future__ import annotations
 
@@ -123,3 +137,61 @@ def run(mutations, test_file, *, prefix, timeout=300, ignore=()):
         for name, why in survived:
             print("  %s  (%s)" % (name, why))
     return 1 if (survived or crashes) else 0
+
+
+# -- the needle audit -------------------------------------------------------
+
+def check() -> int:
+    """Every harness's needles, matched against the source they name.
+
+    Two ways a needle rots, and both are silent:
+
+    **Gone.** The code moved and the mutation is never applied. `run()` calls
+    that a survivor, correctly, but only after the sweep it was supposed to
+    make cheap.
+
+    **Doubled.** `run()` uses `replace(needle, repl, 1)`, so a needle that
+    matches twice mutates whichever copy comes first in the file -- which may
+    be a function no gate in that harness is looking at. `mutate_cp7b.py`
+    documents having reached into a `try:` block on purpose to avoid exactly
+    that, which is the evidence it happens.
+
+    Reports both and returns 1 if either is found. Runs no tests and copies no
+    trees: this is the check you can afford before every commit.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, here)
+    gone, doubled, total = [], [], 0
+    for name in sorted(os.listdir(here)):
+        if not (name.startswith("mutate_") and name.endswith(".py")):
+            continue
+        module = __import__(name[:-3])
+        for label, rel, needle, _repl, _expected in getattr(module,
+                                                            "MUTATIONS", []):
+            total += 1
+            try:
+                with open(os.path.join(ROOT, rel), encoding="utf-8") as fh:
+                    src = fh.read()
+            except OSError as exc:
+                gone.append((name, label, "%s: %s" % (rel, exc.strerror)))
+                continue
+            hits = src.count(needle)
+            if hits == 0:
+                gone.append((name, label, "no match in %s" % rel))
+            elif hits > 1:
+                doubled.append((name, label, "%d matches in %s" % (hits, rel)))
+    for heading, rows in (("MISSING -- never applied, scored as a survivor",
+                           gone),
+                          ("AMBIGUOUS -- replace(..., 1) picks the first",
+                           doubled)):
+        if rows:
+            print("%s:" % heading)
+            for harness, label, why in rows:
+                print("  %-16s %-46s %s" % (harness, label[:46], why))
+    print("%d needles checked, %d missing, %d ambiguous"
+          % (total, len(gone), len(doubled)))
+    return 1 if (gone or doubled) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(check())
