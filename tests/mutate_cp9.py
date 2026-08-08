@@ -225,7 +225,11 @@ MUTATIONS = [
      "        l4 = search.build(store)",
      "        l4 = search.build(store)\n"
      "        embed.build(store)  # mutated: M-3's 219.9 s at open",
-     "15 update fills L2, L3 and L4 and does not embed"),
+     # Gate 0, not 15, and that is not a compromise: an `update` that embeds
+     # breaks the *first* update the suite does, so the setup guard is where
+     # this lands and gate 15 never runs. Naming 15 here reported the kill as
+     # a misattribution and hid which gate actually holds the line.
+     "0  the project builds before anything is embedded"),
 
     ("the embed command does not embed",
      "morpho_homegraph/cli.py",
