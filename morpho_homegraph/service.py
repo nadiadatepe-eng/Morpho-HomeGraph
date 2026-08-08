@@ -47,7 +47,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import content, graph, identity, scope, search
+from . import content, graph, identity, journal, scope, search
 from .lock import Locked, StoreLock, Unguarded
 from .scan import knows, scan
 from .store import L0, Store, db_path, l0_path, projects
@@ -105,6 +105,30 @@ def chosen_scope(root: str):
         chosen, _patterns = scope.from_repo(root)
         return chosen
     return scope.from_folder(root)
+
+
+def union_keep():
+    """What any registered project would index, as one predicate (CP-15 R1/R2).
+
+    **Recomputed from disk, never loaded from the saved `scope` tables.** A
+    stored scope that gets reused is CP-3's bug in new clothing: `.gitignore`
+    is edited, and a folder becomes a repo. `chosen_scope` reads the tree, and
+    that costs one `.gitignore` per registered project per sweep -- against a
+    16-second sweep it does not register.
+
+    A predicate rather than a list of roots, because a list cannot say
+    `.gitignore` and `node_modules` is exactly where the churn is. Hashing it
+    every pass is how the cheap layer becomes the expensive one.
+
+    An empty registry gives a predicate that is false everywhere, which is the
+    honest answer: nothing is indexed, so nothing is worth hashing.
+    """
+    selected = [chosen_scope(path) for _pid, path in projects()]
+
+    def keep(path: str) -> bool:
+        return any(s.contains(path, is_dir=False) for s in selected)
+
+    return keep
 
 
 # -- the one definition of an update ---------------------------------------
@@ -227,9 +251,22 @@ def keeper(project_scope, stores):
     (R4), and everything else is kept only if the scope would have indexed it.
     """
     ignore = [os.path.abspath(str(s)) for s in stores]
+    # The directories that *hold* the stores, not just the store files.
+    #
+    # **CP-15 needed this and CP-13's gate 6 found it.** For inotify the two
+    # guards are `relevant` (belt) and `store_prune` (braces) -- the kernel is
+    # simply never asked about a pruned directory. The journal has no kernel
+    # to prune: `scan` walks everything, so `.../store/l0` and
+    # `.../store/<id>` arrive as ordinary changed directories, and `relevant`
+    # lets them through because they are neither the db path nor prefixed by
+    # it. One update then wrote the store, the next sweep saw the directory
+    # move, and the service updated for ever.
+    holders = [os.path.dirname(p) for p in ignore]
 
     def keep(path: str) -> bool:
         if not relevant(path, ignore):
+            return False
+        if any(path == d or path.startswith(d + os.sep) for d in holders):
             return False
         if is_layout(path):
             return True
@@ -285,19 +322,45 @@ def _take(paths, out) -> list[StoreLock] | None:
     return held
 
 
-def _sweep(root: str, out) -> dict:
-    """The broad clock: rebuild L0, then look at what it cost the file.
+def _sweep(root: str, out) -> tuple[dict, list[str]]:
+    """The broad clock: rebuild L0, look at the file, and read the journal.
 
-    Project layers are deliberately not touched here (gate 13). A sweep that
-    rebuilt every project would pay M-3's minutes on the catalogue's schedule.
+    Project layers are still not rebuilt here wholesale (CP-13 gate 13). What
+    changed in CP-15 is that the sweep now *reads* what it learned: the paths
+    the journal says moved come back, and the caller decides which projects
+    they belong to.
     """
     with Store(l0_path(), role=L0) as store:
-        summary = scan(store, root)
+        summary = scan(store, root, union_keep())
+        moved = [p for (p,) in store.db.execute(
+            "SELECT path FROM journal WHERE state <> ?", (journal.UNCHANGED,))]
         freed = maybe_vacuum(store)
-    out("sweep    %d entries in %.2f s%s"
-        % (summary["count"], summary["seconds"],
+    out("sweep    %d entries in %.2f s, %d moved%s"
+        % (summary["count"], summary["seconds"], len(moved),
            "" if freed is None else "  (VACUUM at %.0f %% free)" % (freed * 100)))
-    return summary
+    return summary, moved
+
+
+def _react_to_sweep(moved, roots, keeps, paths, watched_ids, out) -> set[str]:
+    """Which projects the sweep's own findings call for, and what to say.
+
+    **This is the only thing the broad half can tell the narrow one, and it
+    closes CP-13 blind spot 1 (R5).** inotify knows nothing about what changed
+    while the service was down; the journal does, so the first sweep after a
+    restart catches up instead of waiting for the next save.
+
+    **A project whose guard we do not hold is reported, never written (R6).**
+    A service that takes a guard to be helpful is a service that locks a
+    person out of their own project, and CP-13 gate 3 says that must not
+    happen.
+    """
+    hits = _hits(((p, 0) for p in moved), roots, keeps)
+    unwatched = sorted(hits - set(watched_ids))
+    for project_id in unwatched:
+        out("changed  %s  %s has changes and is not watched: "
+            "morphofiles-graph update %s" % (project_id, paths[project_id],
+                                             project_id))
+    return hits & set(watched_ids)
 
 
 def _update(project_id: str, root: str, out) -> None:
@@ -365,21 +428,35 @@ def serve(*, scan_root: str = "~", sweep_seconds: float = SWEEP_SECONDS,
                     "%.0f min sweep)" % (exc, len(watched), sweep_seconds / 60))
                 source = _Silent(sleep)
             owned = source
+        # Two views of the same projects. Events may only ever reach a project
+        # whose guard we hold, so `roots` is the watched ones -- but the
+        # sweep's journal covers the whole catalogue, and R6 says an unwatched
+        # project with changes is *reported*, which needs its scope too.
+        everyone = projects()
         keeps = {pid: keeper(chosen_scope(path), store_paths)
-                 for pid, path in watched}
+                 for pid, path in everyone}
         roots = sorted(((path, pid) for pid, path in watched),
                        key=lambda pair: len(pair[0]), reverse=True)
-        paths = dict(watched)
+        all_roots = sorted(((path, pid) for pid, path in everyone),
+                           key=lambda pair: len(pair[0]), reverse=True)
+        paths = dict(everyone)
+        watched_ids = {pid for pid, _path in watched}
 
         next_sweep = clock()
         done = 0
         while rounds is None or done < rounds:
             done += 1
             batch = source.read(max(0.0, next_sweep - clock()))
+            hits: set[str] = set()
             if clock() >= next_sweep:
-                _sweep(scan_root, out)
+                _summary, moved = _sweep(scan_root, out)
                 next_sweep = clock() + sweep_seconds
-            hits = _hits(batch, roots, keeps)
+                # What the broad half tells the narrow one (R5). A watched
+                # project that changed while the service was down is invisible
+                # to inotify and plain in the journal.
+                hits |= _react_to_sweep(moved, all_roots, keeps, paths,
+                                        watched_ids, out)
+            hits |= _hits(batch, roots, keeps)
             if not hits:
                 if batch:
                     # Events arrived and none was worth keeping. Reading again

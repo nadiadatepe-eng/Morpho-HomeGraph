@@ -148,12 +148,22 @@ MUTATIONS = [
     # Not a defect: this is the *fix* for open thread 7b, applied as a
     # mutation. Gate 12 exists so that doing it turns the checkpoint red and
     # forces the decision, instead of quietly changing what gate 11 means.
-    ("scan is given a scope, so content_hash starts being written",
+    # This used to be the *fix* for open thread 7b, kept as a mutation so
+    # that applying it would turn the checkpoint red and force the decision.
+    # CP-15 applied it for real, so the mutation turned around: the defect is
+    # now taking the scope away again -- and with it the divergence this
+    # answer key predicted, then measured as absent, and CP-15 made true.
+    ("scan loses its scope again, so no file is ever hashed",
      "morpho_homegraph/cli.py",
-     "            summary = scan(store, args.root)",
-     "            summary = scan(store, args.root, [str(args.root)])"
-     "  # mutated",
-     "12 the moment scan is given a scope this gate goes red, by design"),
+     "            summary = scan(store, args.root, service.union_keep())",
+     "            summary = scan(store, args.root)  # mutated: no scope",
+     "11 the file edited with size and mtime preserved keeps A's old hash"),
+
+    ("the union says yes to everything, so .gitignore stops counting",
+     "morpho_homegraph/service.py",
+     "        return any(s.contains(path, is_dir=False) for s in selected)",
+     "        return bool(selected)  # mutated: the whole tree is in scope",
+     "12 the file that left the scope keeps A's old hash too"),
 
     # -- the corpus has to really differ on every axis (R4, gate 10) -------
     ("the size-preserving edit stops preserving the size",

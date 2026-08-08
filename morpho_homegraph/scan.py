@@ -159,7 +159,7 @@ def walk(root: str | Path, deny=DEFAULT_DENY):
 
 
 def scan(store, root: str | Path,
-         scope: list[str] | None = None, deny=DEFAULT_DENY) -> dict:
+         keep=None, deny=DEFAULT_DENY) -> dict:
     """Walk `root` into the store's `files` table. Returns a summary.
 
     The whole walk is one transaction. A half-written L0 is worse than none:
@@ -203,7 +203,7 @@ def scan(store, root: str | Path,
             "INSERT OR REPLACE INTO files_new "
             "(path, kind, size, mtime_ns, inode, dev) VALUES (?, ?, ?, ?, ?, ?)",
             rows())
-        tally = journal.build(store, scope or [])
+        tally = journal.build(store, keep)
         db.execute("DELETE FROM files")
         db.execute("INSERT INTO files SELECT * FROM files_new")
         db.execute("DROP TABLE files_new")

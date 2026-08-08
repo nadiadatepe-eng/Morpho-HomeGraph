@@ -308,12 +308,17 @@ def gates_clocks(work):
     check("12 the periodic sweep rebuilds L0 with no event at all",
           code == 0 and catalogued > 0 and len(sweeps(lines)) == 1,
           "%d catalogued, %d sweep line(s)" % (catalogued, len(sweeps(lines))))
-    # The control for 12. A sweep that also rebuilt every project would pay
-    # M-3's minutes on the catalogue's schedule, and 12 would not notice.
-    check("13 CONTROL: the sweep does not build any project's layers",
-          rows(project_id, "content") == 0 and not updates(lines),
-          "L2=%d, %d update line(s)" % (rows(project_id, "content"),
-                                        len(updates(lines))))
+    # 13 was "the sweep builds no project layers at all" until CP-15, and CP-15
+    # deliberately made that false: the sweep now updates a watched project the
+    # journal says changed, which is the only thing the broad half can tell the
+    # narrow one (CP-15 R5) and the one way a project catches up on changes
+    # made while the service was down. **Re-decided, not deleted** -- what has
+    # to stay true is that the sweep builds only what the journal *names*, and
+    # a second sweep over a settled corpus therefore builds nothing.
+    _, settled = run_rounds([[]], rounds=1)
+    check("13 CONTROL: a second sweep over a settled corpus builds nothing",
+          not updates(settled) and bool(sweeps(settled)),
+          "%d update line(s) on the settled sweep" % len(updates(settled)))
 
     # The control for 12, and it is the one that catches a sweep on every
     # round: gate 12 counts one sweep in one round, which is also what a

@@ -61,37 +61,36 @@ MUTATIONS = [
 
     # -- the scope is a boundary, not a suggestion -------------------------
     ("everything is in scope",
-     "morpho_homegraph/journal.py",
-     "    for root in scope:\n"
-     "        if path == root or path.startswith(root.rstrip(\"/\") + \"/\"):\n"
-     "            return True\n"
-     "    return False",
+     # CP-15 moved the decision: `journal` takes a predicate now, and the
+     # "is this path under that root" rule lives in `scope._under`, where
+     # `Scope.contains` uses it. Two copies of one rule is what this repo
+     # keeps finding, so there is only one left to mutate.
+     "morpho_homegraph/scope.py",
+     "    return path == root or path.startswith(root.rstrip(\"/\") + os.sep)",
      "    return True  # mutated: read whatever we like",
      "8  no file outside the scope is opened"),
 
     ("nothing is in scope",
-     "morpho_homegraph/journal.py",
-     "    for root in scope:\n"
-     "        if path == root or path.startswith(root.rstrip(\"/\") + \"/\"):\n"
-     "            return True\n"
-     "    return False",
+     "morpho_homegraph/scope.py",
+     "    return path == root or path.startswith(root.rstrip(\"/\") + os.sep)",
      "    return False  # mutated: never read anything",
      "6  a pure touch is touched, and touched can fire"),
 
     ("scope matches on string prefix, not at a separator",
-     "morpho_homegraph/journal.py",
-     '        if path == root or path.startswith(root.rstrip("/") + "/"):',
-     "        if path.startswith(root):  # mutated: /a/inside2 counts as /a/inside",
+     "morpho_homegraph/scope.py",
+     '    return path == root or path.startswith(root.rstrip("/") + os.sep)',
+     "    return path.startswith(root)"
+     "  # mutated: /a/inside2 counts as /a/inside",
      "8  no file outside the scope is opened"),
 
     # -- the states themselves --------------------------------------------
     ("a difference outside the scope is called changed",
      "morpho_homegraph/journal.py",
-     "    if kind != \"file\" or not in_scope(path, scope):\n"
+     "    if kind != \"file\" or not keep(path):\n"
      "        # Something differs and nobody is going to read the file. Saying\n"
      "        # `changed` would be a guess wearing a confident name.\n"
      "        return UNCONFIRMED, old_hash",
-     "    if kind != \"file\" or not in_scope(path, scope):\n"
+     "    if kind != \"file\" or not keep(path):\n"
      "        return CHANGED, old_hash  # mutated: guess, confidently",
      "7  a change outside the scope is unconfirmed"),
 
@@ -132,10 +131,10 @@ MUTATIONS = [
     # has to compare against. Every row then looks new.
     ("L0 is replaced before L1 has read it",
      "morpho_homegraph/scan.py",
-     "        tally = journal.build(store, scope or [])\n"
+     "        tally = journal.build(store, keep)\n"
      '        db.execute("DELETE FROM files")',
      '        db.execute("DELETE FROM files")  # mutated: diff against nothing\n'
-     "        tally = journal.build(store, scope or [])",
+     "        tally = journal.build(store, keep)",
      "3  an untouched file is unchanged"),
 ]
 

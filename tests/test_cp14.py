@@ -78,11 +78,21 @@ def project_db(home):
 
 
 def build(home, corpus, register=True):
-    """Catalogue, register, fill the layers, embed. Returns the exit codes."""
-    codes = [cli(home, "scan", corpus).returncode]
+    """Register, catalogue, fill the layers, embed. Returns the exit codes.
+
+    **`add` comes before `scan`, and that order is a finding rather than a
+    preference.** `scan` hashes what the *registered* projects would index
+    (CP-15 R1), so a scan run before the project exists hashes nothing at all
+    -- measured here first, as a fair comparison that was not fair: the
+    rebuilt store had NULL for every path while the updated one had hashes,
+    and the divergence landed on five files that have nothing to do with the
+    two this checkpoint predicts. A store "built on B from nothing" means
+    registered first, then catalogued.
+    """
+    codes = []
     if register:
-        added = cli(home, "add", corpus)
-        codes.append(added.returncode)
+        codes.append(cli(home, "add", corpus).returncode)
+    codes.append(cli(home, "scan", corpus).returncode)
     project = os.path.basename(os.path.dirname(project_db(home)))
     codes.append(cli(home, "update", project).returncode)
     codes.append(cli(home, "embed", project).returncode)
@@ -115,6 +125,12 @@ def corpus_a(root):
     write(os.path.join(root, "twin-a.md"), "identical bytes on two paths\n")
     write(os.path.join(root, "linker.md"), "see [[a]]\n")
     write(os.path.join(root, "dropped", "keep.md"), "in scope in A only\n")
+    # A repo, because `chosen_scope` only reads `.gitignore` for one --
+    # `from_folder` applies JUNK and nothing else. Without this the
+    # "left the scope" axis is a line of text with no effect, which is
+    # exactly what gate 12 caught the first time this ran.
+    os.makedirs(os.path.join(root, ".git", "objects"), exist_ok=True)
+    write(os.path.join(root, ".git", "objects", "loose"), "not content\n")
     return root
 
 
@@ -156,10 +172,16 @@ def corpus_b(root):
     # 7 a file that gets a `reason` instead of text
     write(os.path.join(root, "binary.bin"), b"\x00\x01\x02\x00garbage", "wb")
     facts["unreadable"] = os.path.isfile(os.path.join(root, "binary.bin"))
-    # 8 out of scope: the layout changes, not the file
+    # 8 out of scope: the layout changes, not the file. Checked by asking
+    # the scope before and after, not by reading the file we just wrote --
+    # the first version asserted that `.gitignore` contains "dropped/", which
+    # is true of a corpus where `.gitignore` is never consulted at all.
+    from morpho_homegraph import service as _service
+    keep_md = os.path.join(root, "dropped", "keep.md")
+    was_in = _service.chosen_scope(root).contains(keep_md, is_dir=False)
     write(os.path.join(root, ".gitignore"), "notes/\ndropped/\n")
-    facts["left_scope"] = "dropped/" in open(
-        os.path.join(root, ".gitignore")).read()
+    now_in = _service.chosen_scope(root).contains(keep_md, is_dir=False)
+    facts["left_scope"] = was_in and not now_in
     # 9 an edge moves
     write(os.path.join(root, "linker.md"), "see [[edited]]\n")
     facts["edge_moved"] = "[[edited]]" in open(
@@ -255,19 +277,31 @@ def gates(work):
     # 11, 12, 13: L0.
     l0_inc = os.path.join(inc, "l0", "index.db")
     l0_fresh = os.path.join(fresh, "l0", "index.db")
-    hashes = _hashes(l0_inc) | _hashes(l0_fresh)
-    check("11 files.content_hash is inert: no production path ever writes it",
-          hashes == {None},
-          "distinct values: %s" % sorted(str(h)[:12] for h in hashes))
-    inert = _scan_passes_no_scope()
-    check("12 the moment scan is given a scope this gate goes red, by design",
-          inert,
-          "" if inert else "a caller now passes a scope: content_hash starts "
-          "being written, and gate 11 has to be decided again")
     l0diff = compare(catalogue_state(l0_inc), catalogue_state(l0_fresh))
-    check("13 the catalogue rows are the same set",
-          "files" not in l0diff,
-          report({"files": l0diff["files"]})[:110] if "files" in l0diff else "")
+    diverged = {p for p, _h in l0diff.get("hashes", {}).get("only_in_a", [])}
+    diverged |= {p for p, _h in l0diff.get("hashes", {}).get("only_in_b", [])}
+
+    # 11 and 12 are this answer key's original prediction, and the story of
+    # how they got here is the checkpoint's own record: they were written
+    # before the code, measured as **absent** the same evening (no caller ever
+    # gave `scan` a scope, so the column was NULL for all 430 189 rows), and
+    # made true by CP-15. The gate text is back to what it said first.
+    sneaky = os.path.join(corpus, "sneaky.md")
+    left_scope = {os.path.join(corpus, "dropped", "keep.md")}
+    check("11 the file edited with size and mtime preserved keeps A's old "
+          "hash", sneaky in diverged,
+          "%d paths diverge" % len(diverged))
+    check("12 the file that left the scope keeps A's old hash too",
+          left_scope <= diverged,
+          "missing: %s" % sorted(os.path.basename(p)
+                                 for p in left_scope - diverged))
+    # The control: without it, 11 and 12 are green for an L0 that diverges
+    # everywhere, which is what a broken carry-forward would produce.
+    unexpected = diverged - {sneaky} - left_scope
+    check("13 CONTROL: nothing else diverges, so the carry-forward is exact",
+          not unexpected and "files" not in l0diff,
+          "unexpected: %s" % sorted(os.path.basename(p)
+                                    for p in unexpected)[:5])
 
     # 14: the vector layer's identity, which is not in the vector key.
     check("14 embed_chunking, embed_model and embed_dim agree",
@@ -328,52 +362,10 @@ def _set_meta(db_path, key, value):
         db.close()
 
 
-def _hashes(l0_db):
-    import sqlite3
-    db = sqlite3.connect("file:%s?mode=ro" % l0_db, uri=True)
-    try:
-        return {h for (h,) in db.execute("SELECT DISTINCT content_hash "
-                                         "FROM files")}
-    finally:
-        db.close()
-
-
 def _meta_differs(left, right, keys):
     a = dict(project_state(left)["meta"])
     b = dict(project_state(right)["meta"])
     return [k for k in keys if a.get(k) != b.get(k)]
-
-
-def _scan_passes_no_scope():
-    """True while no caller in the package hands `scan` a scope.
-
-    Read as call nodes, not as text: this file's own prose says `scan(store,`
-    several times, and a grep would count it. When someone does start passing
-    one, `content_hash` begins to be written and gate 11 stops being true --
-    so this gate is what makes that a red check rather than a silent change
-    of meaning.
-    """
-    import ast
-
-    import morpho_homegraph
-    package = os.path.dirname(os.path.abspath(morpho_homegraph.__file__))
-    for name in sorted(os.listdir(package)):
-        if not name.endswith(".py") or name == "scan.py":
-            continue
-        with open(os.path.join(package, name), encoding="utf-8") as fh:
-            tree = ast.parse(fh.read(), filename=name)
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
-            named = (func.attr if isinstance(func, ast.Attribute)
-                     else getattr(func, "id", ""))
-            if named != "scan":
-                continue
-            if len(node.args) > 2 or any(kw.arg == "scope"
-                                         for kw in node.keywords):
-                return False
-    return True
 
 
 def main() -> int:

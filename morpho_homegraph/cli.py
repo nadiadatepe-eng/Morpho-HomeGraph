@@ -233,7 +233,10 @@ def cmd_scan(args: argparse.Namespace) -> int:
         return 2
     try:
         with Store(store_db, role=L0) as store:
-            summary = scan(store, args.root)
+            # CP-15 R1: the union of every registered project's scope, worked
+            # out from the trees themselves. Before this, `scan` passed
+            # nothing and `content_hash` was NULL for all 430 189 rows.
+            summary = scan(store, args.root, service.union_keep())
     finally:
         barrier.release()
     print("%d entries in %.2f s (%d unreadable directories)"

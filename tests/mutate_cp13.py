@@ -182,18 +182,19 @@ MUTATIONS = [
 
     ("the sweep runs every round instead of on its own clock",
      "morpho_homegraph/service.py",
-     "                _sweep(scan_root, out)\n"
+     "                _summary, moved = _sweep(scan_root, out)\n"
      "                next_sweep = clock() + sweep_seconds",
-     "                _sweep(scan_root, out)  # mutated: the clock never moves",
+     "                _summary, moved = _sweep(scan_root, out)"
+     "  # mutated: the clock never moves",
      "12b CONTROL: a second round with the sweep not due does not sweep"),
 
     # The control for 12. A sweep that rebuilds every project pays M-3's
     # minutes on the catalogue's schedule, and gate 12 cannot see it.
     ("the broad sweep also rebuilds every watched project",
      "morpho_homegraph/service.py",
-     "                _sweep(scan_root, out)\n"
+     "                _summary, moved = _sweep(scan_root, out)\n"
      "                next_sweep = clock() + sweep_seconds",
-     "                _sweep(scan_root, out)\n"
+     "                _summary, moved = _sweep(scan_root, out)\n"
      "                for _p, _r in watched:  # mutated: broad does narrow\n"
      "                    _update(_p, _r, out)\n"
      "                next_sweep = clock() + sweep_seconds",

@@ -72,23 +72,14 @@ def content_hash(path: str) -> str | None:
     return digest.hexdigest()
 
 
-def in_scope(path: str, scope: list[str]) -> bool:
-    """Is `path` inside one of the scope roots?
-
-    Matched at a separator, never as a string prefix -- `/home/n/a` is not
-    inside `/home/n/ab`. The same mistake as CP-0's mount lookup, which cost
-    a mutation round to find there.
-    """
-    for root in scope:
-        if path == root or path.startswith(root.rstrip("/") + "/"):
-            return True
-    return False
-
-
 def resolve_candidate(path: str, kind: str, old_hash: str | None,
-                      scope: list[str]) -> tuple[str, str | None]:
-    """(state, hash to store) for a row whose size or mtime moved."""
-    if kind != "file" or not in_scope(path, scope):
+                      keep) -> tuple[str, str | None]:
+    """(state, hash to store) for a row whose size or mtime moved.
+
+    `keep(path)` is the corpus predicate (CP-15 R2): true for anything some
+    registered project would index, `.gitignore` included.
+    """
+    if kind != "file" or not keep(path):
         # Something differs and nobody is going to read the file. Saying
         # `changed` would be a guess wearing a confident name.
         return UNCONFIRMED, old_hash
@@ -104,15 +95,19 @@ def resolve_candidate(path: str, kind: str, old_hash: str | None,
     return (TOUCHED if now == old_hash else CHANGED), now
 
 
-def build(store, scope: list[str]) -> dict[str, int]:
+def build(store, keep=None) -> dict[str, int]:
     """Diff `files_new` against `files`, filling `journal`. Returns the tally.
+
+    `keep(path)` decides what is worth a hash. `None` means nothing is --
+    which is what every caller passed implicitly until CP-15, and why
+    `content_hash` was NULL for all 430 189 rows of the real store.
 
     Done in SQL rather than by loading both passes into dictionaries: a home
     area is 729 343 entries (measured 2026-08-03), and the set of rows whose
     size or mtime actually moved between two passes is small. Only that set
     reaches Python, and only the part of it inside the scope is ever opened.
     """
-    scope = [str(Path(s).expanduser().resolve()) for s in scope]
+    keep = keep or (lambda _path: False)
     db = store.db
     db.execute("DELETE FROM journal")
 
@@ -144,7 +139,7 @@ def build(store, scope: list[str]) -> dict[str, int]:
     for path, kind in db.execute(
             "SELECT n.path, n.kind FROM files_new n JOIN journal j "
             "ON j.path = n.path WHERE j.state = ?", (ADDED,)).fetchall():
-        if kind == "file" and in_scope(path, scope):
+        if kind == "file" and keep(path):
             db.execute("UPDATE files_new SET content_hash = ? WHERE path = ?",
                        (content_hash(path), path))
 
@@ -154,7 +149,7 @@ def build(store, scope: list[str]) -> dict[str, int]:
         "JOIN files o ON o.path = n.path "
         "WHERE n.size <> o.size OR n.mtime_ns <> o.mtime_ns").fetchall()
     for path, kind, old_hash in candidates:
-        state, digest = resolve_candidate(path, kind, old_hash, scope)
+        state, digest = resolve_candidate(path, kind, old_hash, keep)
         db.execute("INSERT INTO journal (path, state) VALUES (?, ?)",
                    (path, state))
         db.execute("UPDATE files_new SET content_hash = ? WHERE path = ?",

@@ -30,6 +30,7 @@ from report import reporter  # noqa: E402
 
 from morpho_homegraph.journal import (  # noqa: E402
     ADDED, CHANGED, REMOVED, TOUCHED, UNCHANGED, UNCONFIRMED)
+from morpho_homegraph import scope as scope_mod  # noqa: E402
 from morpho_homegraph.lock import StoreLock  # noqa: E402
 from morpho_homegraph.scan import scan  # noqa: E402
 from morpho_homegraph.store import L0, Store, l0_path  # noqa: E402
@@ -80,7 +81,10 @@ def main():
         os.makedirs(inside)
         os.makedirs(outside)
         os.makedirs(lookalike)
-        scope = [inside]
+        # CP-15: `journal.build` takes a predicate, not a list of roots.
+        # Built with the production `Scope` so gate 3's sibling-prefix
+        # case still runs through the code that owns that rule.
+        scope = scope_mod.Scope().add(inside).contains
 
         write(os.path.join(inside, "steady.txt"), "steady\n")
         write(os.path.join(inside, "same-length.json"), '{"d": "2026-08-01"}\n')
@@ -215,7 +219,8 @@ def main():
                 # changing it must not produce `changed` out of thin air.
                 summary, states = pass_over(store, tree, scope)
                 write(os.path.join(outside, "far.json"), '{"d": "2026-08-03"}\n')
-                summary, states = pass_over(store, tree, scope + [outside])
+                wider = scope_mod.Scope().add(inside).add(outside).contains
+                summary, states = pass_over(store, tree, wider)
                 check("10 a NULL stored hash gives unconfirmed, not a verdict",
                       states[os.path.join(outside, "far.json")] == UNCONFIRMED,
                       states[os.path.join(outside, "far.json")])
