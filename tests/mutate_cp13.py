@@ -66,13 +66,15 @@ MUTATIONS = [
      "        for lock in held:\n"
      "            lock.release()",
      "        pass  # mutated: the kernel can clean up",
-     "17 Ctrl-C releases every guard: a scan straight after succeeds"),
+     # 17, not 17b: the subprocess form cannot fail here, because the kernel
+     # drops a dead process's flocks whether or not `release()` ran.
+     "17 serve releases every guard on the way out, in this process"),
 
     ("the service starts silently, so nothing can tell when it is the writer",
      "morpho_homegraph/service.py",
-     "    out(\"serving  %d guard(s) held, %d watched project(s), sweep every \"",
-     "    (lambda *_a: None)(\"serving  %d guard(s) held, %d watched "
-     "project(s), sweep every \"  # mutated",
+     "    out(\"serving  %d guard(s) held, %d watched project(s), sweep every \"\n"
+     "        \"%.0f min\" % (len(held), len(watched), sweep_seconds / 60))",
+     "    pass  # mutated: start without saying so",
      "4b the service says it is holding the guards before it sweeps"),
 
     # -- an update never triggers itself (R2) ------------------------------
@@ -121,7 +123,7 @@ MUTATIONS = [
      "morpho_homegraph/service.py",
      "    store.set_meta(WATCH, \"1\" if on else \"0\")",
      "    store.set_meta(WATCH, \"1\")  # mutated: --off does nothing",
-     "11a only the flagged project is listed as watched"),
+     "21b CONTROL: watch --off clears the flag again"),
 
     # `Inotify` holds one `_prune` field, so a per-project closure leaves the
     # last project's scope deciding for the first project's new directories.
@@ -213,20 +215,28 @@ MUTATIONS = [
      "morpho_homegraph/service.py",
      "    if free < threshold:\n"
      "        return None",
-     "    if False:  # mutated: always worth it",
+     "    if False:  # mutated: always worth it\n"
+     "        return None",
      "15 CONTROL: under the threshold VACUUM does not run"),
 
+    # Gate 15 used to be the one named here, and it was the wrong one: its
+    # threshold was `fragmentation(...) + 0.5`, worked out from the very
+    # function this mutates, so it stayed green. 14b compares against the
+    # pragmas instead.
     ("fragmentation is measured against the free pages, so it is always 1",
      "morpho_homegraph/service.py",
      "    return free / total if total else 0.0",
      "    return 1.0 if free else 0.0  # mutated",
-     "15 CONTROL: under the threshold VACUUM does not run"),
+     "14b fragmentation is free pages over all pages, not a constant"),
 
     # -- a missing event source is a refusal, not a crash (R7) -------------
     ("a machine without inotify takes the whole service down",
      "morpho_homegraph/service.py",
      "            except InotifyUnavailable as exc:",
-     "            except _NeverRaised as exc:  # mutated: let it propagate",
+     # A real exception that this block cannot raise, rather than a name that
+     # does not exist: the first mutates the behaviour, the second only breaks
+     # the import, and a NameError names no gate.
+     "            except ZeroDivisionError as exc:  # mutated: let it propagate",
      "16 without inotify the service says so, sweeps, and exits 0"),
 
     ("the fallback is silent, so unwatched projects look watched",
@@ -254,6 +264,10 @@ MUTATIONS = [
     # it is a second build path someone writes because the first one refused
     # them. So the mutation writes the call that would have caused it -- the
     # one that takes a guard this process already holds.
+    # Caught by a *static* gate, so `gates_one_update()` runs first in
+    # `main()`. When it ran last, the runtime crash this mutation causes took
+    # the suite down before the verdict was printed, and a crash names no
+    # gate -- measured 2026-08-08.
     ("the service goes through cmd_update, which would refuse itself",
      "morpho_homegraph/service.py",
      "            result = build_layers(store, project_id)",

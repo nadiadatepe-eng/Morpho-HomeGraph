@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import ast
 import os
+import selectors
 import subprocess
 import sys
 import tempfile
@@ -35,6 +36,7 @@ from report import reporter  # noqa: E402
 
 import morpho_homegraph  # noqa: E402
 from morpho_homegraph import service, watch  # noqa: E402
+from morpho_homegraph.lock import holds  # noqa: E402
 from morpho_homegraph.store import Store, db_path, l0_path  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -65,9 +67,18 @@ def write(path, body):
     return path
 
 
-def fresh_home(work, name):
-    """Its own store for one group of gates. Groups must not inherit an L0."""
-    os.environ["MORPHO_HOMEGRAPH_HOME"] = os.path.join(work, name, "store")
+def fresh_home(work, name, store_inside=None):
+    """Its own store for one group of gates. Groups must not inherit an L0.
+
+    `store_inside` puts the store *under* the given directory instead of
+    beside it. That is not a variation for its own sake: with the store
+    outside every watched tree, `_hits` drops a store path before `keep` is
+    ever asked, and the self-trigger guard is never exercised. The mutation
+    "store writes are treated as corpus changes" survived a sweep because of
+    exactly that, 2026-08-08.
+    """
+    root = store_inside or os.path.join(work, name)
+    os.environ["MORPHO_HOMEGRAPH_HOME"] = os.path.join(root, "store")
     home = os.path.join(work, name, "home")
     os.makedirs(home, exist_ok=True)
     return home
@@ -75,10 +86,18 @@ def fresh_home(work, name):
 
 def make_repo(root, flavour="one"):
     """A git repo, so `from_repo` is the branch under test and `.gitignore`
-    is a file the scope actually consults."""
+    is a file the scope actually consults.
+
+    **`.gitignore` ignores itself**, and that is the whole point of the
+    fixture. A `.gitignore` the scope would have indexed anyway is kept by
+    `contains()` whether or not `is_layout()` exists, so a gate built on it
+    grades nothing -- which is what the answer key warned about ("the trap is
+    that `.gitignore` is frequently a file L2 would drop anyway") and what the
+    first version of this file did anyway.
+    """
     write(os.path.join(root, "a.md"), "the %s tree, see [[b]]\n" % flavour)
     write(os.path.join(root, "b.md"), "leaf of %s\n" % flavour)
-    write(os.path.join(root, ".gitignore"), "notes/\n")
+    write(os.path.join(root, ".gitignore"), ".gitignore\nnotes/\n")
     write(os.path.join(root, "notes", "ignored.md"), "not indexed\n")
     os.makedirs(os.path.join(root, ".git", "objects"), exist_ok=True)
     write(os.path.join(root, ".git", "objects", "loose"), "not content\n")
@@ -115,13 +134,24 @@ class Scripted(watch.Source):
 
 
 def run_rounds(batches, rounds, *, sweep_seconds=10 ** 6):
-    """Drive `serve` over a scripted source. Returns (exit code, lines)."""
+    """Drive `serve` over a scripted source. Returns (exit code, lines).
+
+    An exception out of `serve` becomes a line rather than the end of the
+    suite. A run that dies takes every gate after it down and names none of
+    them, which is the same "detected only by a crash" verdict this whole
+    checkpoint is written to avoid -- and it is worth exactly as little in a
+    test harness as it is in the service.
+    """
     lines = []
     source = Scripted(batches)
-    code = service.serve(scan_root=os.environ.get("MHG_TEST_ROOT", "~"),
-                         sweep_seconds=sweep_seconds, debounce=0.0,
-                         source=source, out=lines.append,
-                         sleep=lambda _s: None, rounds=rounds)
+    try:
+        code = service.serve(scan_root=os.environ.get("MHG_TEST_ROOT", "~"),
+                             sweep_seconds=sweep_seconds, debounce=0.0,
+                             source=source, out=lines.append,
+                             sleep=lambda _s: None, rounds=rounds)
+    except Exception as exc:  # noqa: BLE001 -- turning a crash into a verdict
+        lines.append("CRASHED  %s: %s" % (type(exc).__name__, exc))
+        code = -1
     return code, lines
 
 
@@ -145,6 +175,15 @@ def gates_guards(work):
                cli("watch", watched_id).returncode == 0
                and _meta(watched_id, "watch") == "1",
                "flag=%r" % _meta(watched_id, "watch"))
+    # 21b: the other direction, and it had no gate at all until 2026-08-08 --
+    # the mutation "watch only ever writes 1" walked straight through a sweep.
+    # A flag that can be set and not cleared is a project you cannot stop
+    # watching without editing the store by hand.
+    cli("watch", other_id)
+    off = cli("watch", other_id, "--off")
+    check("21b CONTROL: watch --off clears the flag again",
+          off.returncode == 0 and _meta(other_id, "watch") == "0",
+          "flag=%r" % _meta(other_id, "watch"))
     if not ok:
         return
 
@@ -191,9 +230,11 @@ def gates_guards(work):
             proc.communicate()
     check("20 CONTROL: a normal start and Ctrl-C exits 0",
           proc.returncode == 0, "rc=%s" % proc.returncode)
-    # Gate 17: the guards are gone with it, checked from outside rather than
-    # by reading our own bookkeeping.
-    check("17 Ctrl-C releases every guard: a scan straight after succeeds",
+    # 17b, and it is weaker than it looks on its own: the kernel drops a dead
+    # process's flocks regardless, so this cannot fail for a missing
+    # `release()`. It grades the signal path -- that SIGINT ends the service
+    # rather than leaving it running -- and gate 17 grades the release.
+    check("17b after Ctrl-C the store is writable again from outside",
           cli("scan", home, timeout=120).returncode == 0)
 
 
@@ -203,26 +244,48 @@ def _meta(project_id, key):
 
 
 def _await(proc, marker, seconds):
-    """The first line containing `marker`, or "" if it never comes."""
+    """The first line containing `marker`, or "" if it never comes.
+
+    Waits on the descriptor, never on `readline()`. A service that prints two
+    lines and then blocks for its next sweep leaves `readline()` blocked for
+    ever, and the deadline above it is only consulted *between* reads -- so
+    the loop that looks bounded never comes back. That is what turned the
+    "starts silently" mutation into `<timeout>` instead of a red gate,
+    measured 2026-08-08.
+    """
     deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            return ""
-        line = proc.stdout.readline()
-        if not line:
-            return ""
-        if marker in line:
-            return line.strip()
-    return ""
+    selector = selectors.DefaultSelector()
+    selector.register(proc.stdout, selectors.EVENT_READ)
+    try:
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                return ""
+            if not selector.select(timeout=0.5):
+                continue
+            line = proc.stdout.readline()
+            if not line:
+                return ""
+            if marker in line:
+                return line.strip()
+        return ""
+    finally:
+        selector.close()
 
 
 # -- 5, 6, 7, 8, 9, 10, 12, 13, 18: the two clocks -------------------------
 
 def gates_clocks(work):
-    """What begins a burst, what does not, and what the sweep leaves alone."""
-    home = fresh_home(work, "clocks")
+    """What begins a burst, what does not, and what the sweep leaves alone.
+
+    **The store sits inside the watched project here**, which is the case R2
+    is written for -- somebody registers `~`, and the index the service writes
+    is suddenly part of the corpus it watches. With the store outside, `_hits`
+    drops a store path before `keep` is asked and gate 6 grades nothing.
+    """
+    root = os.path.join(work, "clocks", "home", "proj")
+    home = fresh_home(work, "clocks", store_inside=root)
     os.environ["MHG_TEST_ROOT"] = home
-    root = make_repo(os.path.join(home, "proj"))
+    make_repo(root)
     project_id = add(root)
     cli("watch", project_id)
 
@@ -233,8 +296,15 @@ def gates_clocks(work):
 
     # Round 1 sweeps and nothing else: the source has nothing to give.
     code, lines = run_rounds([[]], rounds=1)
-    with Store(l0_path(), read_only=True, role="l0") as l0:
-        catalogued = l0.db.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+    # Counted as zero rather than read blindly. A service that never sweeps
+    # leaves no L0 at all, and opening one that is not there raises
+    # `FileNotFoundError` -- which takes the suite down and names no gate,
+    # exactly what this gate is here to prevent one floor down.
+    catalogued = 0
+    if l0_path().is_file():
+        with Store(l0_path(), read_only=True, role="l0") as l0:
+            catalogued = l0.db.execute(
+                "SELECT COUNT(*) FROM files").fetchone()[0]
     check("12 the periodic sweep rebuilds L0 with no event at all",
           code == 0 and catalogued > 0 and len(sweeps(lines)) == 1,
           "%d catalogued, %d sweep line(s)" % (catalogued, len(sweeps(lines))))
@@ -264,7 +334,13 @@ def gates_clocks(work):
           and "L2" in updates(lines)[0] and " s" in updates(lines)[0],
           (updates(lines) or [""])[0][:78])
 
-    # R2: the service's own writes are events too.
+    # R2: the service's own writes are events too, and here they are inside
+    # the watched tree and inside the scope -- so `relevant()` is the only
+    # thing between a store write and a rebuild that writes the store again.
+    check("6a the store really is inside the watched tree and in scope",
+          store_file.startswith(root + os.sep)
+          and service.chosen_scope(root).contains(store_file),
+          store_file[len(root):])
     _, lines = run_rounds([[], [(store_file, 0), (store_file + "-wal", 0)]],
                           rounds=2)
     check("6  the service's own store writes never begin a burst",
@@ -290,6 +366,17 @@ def gates_clocks(work):
     _, lines = run_rounds([[], [(ignored, 0)], []], rounds=2)
     check("10 CONTROL: a change the scope excludes triggers nothing",
           not updates(lines), "%d update line(s)" % len(updates(lines)))
+
+    # 17: checked in-process, because a subprocess proves nothing here. The
+    # kernel drops a dead process's flocks whether or not `serve` released
+    # them, so the subprocess form of this gate stays green with the `finally`
+    # deleted -- measured 2026-08-08, when that mutation was killed by an
+    # unrelated gate instead. `holds()` is this process's own bookkeeping,
+    # and it only clears if `release()` actually ran.
+    still_held = [p for p in (l0_path(), db_path(project_id)) if holds(str(p))]
+    check("17 serve releases every guard on the way out, in this process",
+          not still_held, "still held: %s" % [os.path.basename(str(p))
+                                              for p in still_held])
     del os.environ["MHG_TEST_ROOT"]
 
 
@@ -371,11 +458,24 @@ def gates_vacuum(work):
                 db.commit()
                 db.execute("DELETE FROM files WHERE rowid % 4 != 0")
                 db.commit()
-            free = service.fragmentation(store.db)
             before = store.db.execute("PRAGMA page_count").fetchone()[0]
-            # The control first: the same store, a threshold it does not meet.
+            free_pages = store.db.execute(
+                "PRAGMA freelist_count").fetchone()[0]
+            truth = free_pages / before
+            free = service.fragmentation(store.db)
+            # 14b: worked out from the pragmas here rather than taken from the
+            # function under test. Gate 15 used to derive its own threshold as
+            # `fragmentation(...) + 0.5`, which is green for a `fragmentation`
+            # that always answers 1.0 -- and that mutation survived a sweep on
+            # 2026-08-08 for exactly that reason.
+            check("14b fragmentation is free pages over all pages, not a "
+                  "constant",
+                  abs(free - truth) < 1e-9 and 0.0 < truth < 1.0,
+                  "%.4f from the function, %.4f from the pragmas (%d/%d)"
+                  % (free, truth, free_pages, before))
+            # The control: the same store, a threshold nothing can meet.
             check("15 CONTROL: under the threshold VACUUM does not run",
-                  service.maybe_vacuum(store, threshold=free + 0.5) is None
+                  service.maybe_vacuum(store, threshold=1.01) is None
                   and store.db.execute(
                       "PRAGMA page_count").fetchone()[0] == before,
                   "free=%.2f, pages unchanged at %d" % (free, before))
@@ -406,17 +506,24 @@ def gates_no_inotify(work):
         raise watch.InotifyUnavailable("no libc inotify on this platform")
 
     service.Inotify = refuse
+    # The refusal escaping is the failure this gate is about, so it is caught
+    # here and turned into a red check. Letting it propagate would end the
+    # suite with a traceback, and a traceback names no gate.
+    code, escaped = None, ""
     try:
         code = service.serve(scan_root=home, sweep_seconds=10 ** 6,
                              out=lines.append, sleep=lambda _s: None,
                              rounds=1)
+    except Exception as exc:  # noqa: BLE001 -- the point is that nothing may
+        escaped = "%s: %s" % (type(exc).__name__, exc)
     finally:
         service.Inotify = real
         del os.environ["MHG_TEST_ROOT"]
     check("16 without inotify the service says so, sweeps, and exits 0",
-          code == 0 and any(ln.startswith("unwatched") for ln in lines)
+          not escaped and code == 0
+          and any(ln.startswith("unwatched") for ln in lines)
           and len(sweeps(lines)) == 1,
-          "rc=%s, %d sweep line(s)" % (code, len(sweeps(lines))))
+          escaped or "rc=%s, %d sweep line(s)" % (code, len(sweeps(lines))))
 
 
 # -- 19: one definition of an update ---------------------------------------
@@ -458,13 +565,22 @@ def gates_one_update():
 
 
 def main() -> int:
+    # The static gate first, and the order is not taste. It reads the package
+    # with `ast` and needs nothing to run; a runtime group that crashes ahead
+    # of it takes its verdict down with it, and a mutation caught by a static
+    # gate then reports as "detected only by a crash" -- which names no gate.
+    # Measured 2026-08-08: the `cmd_update` mutation did exactly that.
+    gates_one_update()
     with tempfile.TemporaryDirectory(prefix="mhg-cp13-") as work:
-        gates_guards(work)
+        # `gates_clocks` before `gates_guards`: the sweep is what builds L0,
+        # and every guard gate depends on a catalogue existing. With the order
+        # reversed, breaking the sweep goes red in gate 3 first and the
+        # mutation is filed against a control it has nothing to do with.
         gates_clocks(work)
+        gates_guards(work)
         gates_inotify(work)
         gates_vacuum(work)
         gates_no_inotify(work)
-    gates_one_update()
 
     failed = [n for n, ok, _ in results if not ok]
     print("\n%d/%d checks passed" % (len(results) - len(failed), len(results)))

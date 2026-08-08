@@ -48,7 +48,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import content, graph, identity, scope, search
-from .lock import Locked, StoreLock
+from .lock import Locked, StoreLock, Unguarded
 from .scan import knows, scan
 from .store import L0, Store, db_path, l0_path, projects
 from .watch import Inotify, InotifyUnavailable, relevant, store_prune
@@ -309,6 +309,13 @@ def _update(project_id: str, root: str, out) -> None:
     except Refused as exc:
         out("REFUSED  %s" % exc)
         return
+    except Unguarded as exc:
+        # The service is writing a project whose guard it does not hold, which
+        # means it was never in `watched` when the guards were taken. Naming
+        # the project beats a traceback: the run continues for every other
+        # project, and the line says which one to restart for.
+        out("REFUSED  %s (restart the service to pick it up)" % exc)
+        return
     if result["recreated"]:
         out("update   %s  index recreated, but it has no recorded path"
             % project_id)
@@ -356,7 +363,7 @@ def serve(*, scan_root: str = "~", sweep_seconds: float = SWEEP_SECONDS,
                 # still do.
                 out("unwatched  %s\n(%d project(s) will only be seen by the "
                     "%.0f min sweep)" % (exc, len(watched), sweep_seconds / 60))
-                source = _Silent()
+                source = _Silent(sleep)
             owned = source
         keeps = {pid: keeper(chosen_scope(path), store_paths)
                  for pid, path in watched}
@@ -404,11 +411,21 @@ def serve(*, scan_root: str = "~", sweep_seconds: float = SWEEP_SECONDS,
 
 
 class _Silent:
-    """An event source that never has anything, for a machine without inotify."""
+    """An event source that never has anything, for a machine without inotify.
+
+    It takes the loop's own `sleep` rather than reaching for `time.sleep`. The
+    difference is not style: the loop's first read asks for the whole sweep
+    interval, so a `_Silent` with a hard-wired sleep parks the process for
+    thirty minutes and cannot be driven by a gate at all. Measured 2026-08-08,
+    where it turned a mutation into `<timeout>` instead of a verdict.
+    """
+
+    def __init__(self, sleep=time.sleep):
+        self._sleep = sleep
 
     def read(self, timeout):
         if timeout:
-            time.sleep(timeout)
+            self._sleep(timeout)
         return []
 
     def close(self):

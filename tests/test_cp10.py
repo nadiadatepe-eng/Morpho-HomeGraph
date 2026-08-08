@@ -354,9 +354,17 @@ def gates_command(work):
           and bool(crossed) and crossed[0].endswith("barrier.md"),
           "plain %s, fused %s" % (found(plain_paraphrase.stdout),
                                   [os.path.basename(p) for p in crossed[:3]]))
+    # Read as a route *column*, never as a substring of the output. It was a
+    # substring until 2026-08-08, and CP-12's age line ends every answer with
+    # `vectors <age>` -- so this gate has been unable to go red since CP-12
+    # landed, and said so to nobody. The mutation that proved it ("every hit
+    # claims both routes found it") survived a sweep that had recorded 0
+    # survivors two checkpoints earlier. Same trap gate 5b was already written
+    # to avoid, three lines below.
+    paraphrase_routes = list(routes_of(fused_paraphrase.stdout).values())
     check("6  a file only the vector list found reaches the answer, and says so",
-          "vector" in fused_paraphrase.stdout,
-          "%r" % fused_paraphrase.stdout.strip()[:70])
+          "vector" in paraphrase_routes,
+          "routes=%s" % paraphrase_routes[:5])
 
     # 5 again, end to end: the route is in the output a person reads. Read as
     # the first *column* of each hit line, not as a substring of the output --
