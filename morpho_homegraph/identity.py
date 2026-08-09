@@ -8,7 +8,7 @@ Locked decision 5: mechanically decidable, never a heuristic with a
 confidence. Three outcomes, and the table in the answer key is the whole rule.
 
 **Recognition is one function with two entrances.** `recognise` answers for one
-project, `recognise_all` loops over it -- Nadi's decision 2026-08-04 was that
+project, `recognise_all` loops over it -- a design decision (2026-08-04) was that
 both had to be possible, and the consequence is that neither may hold logic the
 other lacks. Two implementations of one question is how one of them starts
 answering something else, so the sweep is a loop and not a second copy.

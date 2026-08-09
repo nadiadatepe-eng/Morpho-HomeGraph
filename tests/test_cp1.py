@@ -230,10 +230,10 @@ def gates_deny(work):
     # reports a single unreadable row rather than raising -- a scan of the
     # filesystem root would answer "one entry" and no error. Checked on the
     # helper: observing it through a walk means walking the whole filesystem.
-    norm = {r: _normalise_root(r) for r in ("/", "/home/nadi/", "/home/nadi")}
+    norm = {r: _normalise_root(r) for r in ("/", "/home/someone/", "/home/someone")}
     check("28 normalising a root never empties it",
           norm["/"] == os.sep
-          and norm["/home/nadi/"] == norm["/home/nadi"] == "/home/nadi",
+          and norm["/home/someone/"] == norm["/home/someone"] == "/home/someone",
           "%r -> %r" % ("/", norm["/"]))
 
 

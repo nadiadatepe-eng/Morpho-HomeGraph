@@ -3,3 +3,9 @@ __pycache__/
 .venv/
 tools/m1-*.txt
 node_modules/
+
+# The Norwegian development record. Kept locally (decision #13 -- not rewritten),
+# excluded from the public repo: it names the account, the author, and home
+# paths on every decision line. See CP-PUB / FASIT-cppub.md.
+TODO.md
+tests/gold/FASIT-*.md

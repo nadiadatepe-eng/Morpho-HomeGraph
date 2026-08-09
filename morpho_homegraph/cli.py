@@ -35,7 +35,7 @@ def _resolve(value: str) -> str:
     # name it would make the recovery path unreachable.
     #
     # `parent == data_home()` is what makes this an id test rather than a
-    # directory test. `Path("/a") / "/home/nadi"` is `/home/nadi` -- joining an
+    # directory test. `Path("/a") / "/home/someone"` is `/home/someone` -- joining an
     # absolute path throws the left side away -- so without this, any existing
     # directory passed as an argument would be accepted as an id, the registry
     # would never be consulted, and `update` would put an index.db inside the

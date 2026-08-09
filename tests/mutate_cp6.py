@@ -160,8 +160,8 @@ MUTATIONS = [
 
     # -- one question, two entrances ---------------------------------------
     #
-    # The sweep growing its own logic is the failure Nadi's "both must be
-    # possible" invites, and it is invisible until the two disagree.
+    # The sweep growing its own logic is the failure the "both must be
+    # possible" rule invites, and it is invisible until the two disagree.
     ("the sweep answers from the registry instead of asking",
      "morpho_homegraph/identity.py",
      "    return {pid: recognise(pid, l0_store) for pid, _path in projects()}",

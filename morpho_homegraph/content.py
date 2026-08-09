@@ -20,7 +20,7 @@ Only a file that says so itself, in exact bytes, gets `encrypted`.
 **UTF-8 strictly, never `errors="replace"`.** Replacement decoding produces
 text that *looks* read, which CP-8 would index and CP-9 would embed: one silent
 defect propagating into two layers. Measured 2026-08-04, the cost of being
-strict is 1 file in 11 949 under `~/Dokumenter` and 0 under `~/homegraph` once
+strict is 1 file in 11 949 under a large documents tree and 0 under `~/homegraph` once
 `.git/objects` is out of scope.
 """
 from __future__ import annotations

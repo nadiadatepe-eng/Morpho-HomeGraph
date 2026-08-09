@@ -273,7 +273,7 @@ def gates_identity(tree):
     resolved = str(tree)
     # Three ways an id could be a function of the path, not one: a hash of it,
     # a substring of it, or a slug built from it. Testing only the first two
-    # leaves `home-nadi-code` passing a gate named "not derived from the path"
+    # leaves `home-someone-code` passing a gate named "not derived from the path"
     # -- found by codex 2026-08-03. The shape test is what closes the third:
     # `token_hex(8)` is 16 lowercase hex digits, and no slug of a real path is.
     derived = {h(resolved.encode()).hexdigest()
@@ -321,7 +321,7 @@ def gates_identity(tree):
 
 def gates_resolution(work, tree):
     """Found in review, not by a gate: joining an absolute path throws the left
-    side away, so `data_home() / "/home/nadi"` is `/home/nadi`. A test that
+    side away, so `data_home() / "/home/someone"` is `/home/someone`. A test that
     only ever passes real ids never meets it, and the cost is an index.db
     written inside whatever directory the user named.
     """
@@ -524,8 +524,8 @@ def gates_locality():
     filesystem is a check nobody runs.
     """
     check("23 an NFS mount is not a filesystem we can guard",
-          filesystem_of("/home/nadi/.local/share/x", MOUNTINFO) == "nfs4",
-          filesystem_of("/home/nadi/.local/share/x", MOUNTINFO))
+          filesystem_of("/home/someone/.local/share/x", MOUNTINFO) == "nfs4",
+          filesystem_of("/home/someone/.local/share/x", MOUNTINFO))
     check("23b a local mount is recognised as local",
           filesystem_of("/var/lib/x", MOUNTINFO) in LOCAL_FILESYSTEMS,
           filesystem_of("/var/lib/x", MOUNTINFO))
