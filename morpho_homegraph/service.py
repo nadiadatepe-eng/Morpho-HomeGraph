@@ -334,9 +334,14 @@ def _sweep(root: str, out) -> tuple[dict, list[str]]:
         summary = scan(store, root, union_keep())
         moved = [p for (p,) in store.db.execute(
             "SELECT path FROM journal WHERE state <> ?", (journal.UNCHANGED,))]
+        # Logged every sweep, not only when it fires: measured 2026-08-09 the
+        # ratio sat at 19,41 % against a 25 % threshold, and two readings a day
+        # apart cannot tell equilibrium from a slow creep. The decision to keep
+        # `VACUUM_AT` where it is rests on a curve nobody was recording.
+        free = fragmentation(store.db)
         freed = maybe_vacuum(store)
-    out("sweep    %d entries in %.2f s, %d moved%s"
-        % (summary["count"], summary["seconds"], len(moved),
+    out("sweep    %d entries in %.2f s, %d moved, %.2f %% free%s"
+        % (summary["count"], summary["seconds"], len(moved), free * 100,
            "" if freed is None else "  (VACUUM at %.0f %% free)" % (freed * 100)))
     return summary, moved
 
