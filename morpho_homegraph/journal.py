@@ -31,6 +31,14 @@ from pathlib import Path
 ADDED, REMOVED, UNCHANGED, CHANGED, TOUCHED, UNCONFIRMED = (
     "added", "removed", "unchanged", "changed", "touched", "unconfirmed")
 
+# How a stored hash was obtained (CP-17 R3). `COMPARED` is written here, by a
+# pass that had two observations to put side by side. `BACKFILLED` is written
+# by CP-17's command, which has only the file as it is now. The distinction is
+# not bookkeeping: a hash with no comparison behind it cannot support
+# `touched`, and letting it look like one that can is forging evidence -- the
+# same reason `UNCONFIRMED` exists instead of guessing `CHANGED`.
+COMPARED, BACKFILLED = "compared", "backfilled"
+
 # Read in blocks rather than whole: a 200 MB file in the scope should not
 # decide the memory ceiling of the pass that hashes it.
 BLOCK = 1 << 20
@@ -129,7 +137,9 @@ def build(store, keep=None) -> dict[str, int]:
         "WHERE n.size = o.size AND n.mtime_ns = o.mtime_ns", (UNCHANGED,))
     db.execute(
         "UPDATE files_new SET content_hash = ("
-        "  SELECT o.content_hash FROM files o WHERE o.path = files_new.path)"
+        "  SELECT o.content_hash FROM files o WHERE o.path = files_new.path),"
+        "  hash_source = ("
+        "  SELECT o.hash_source FROM files o WHERE o.path = files_new.path)"
         " WHERE path IN (SELECT path FROM journal WHERE state = ?)",
         (UNCHANGED,))
 
@@ -140,8 +150,9 @@ def build(store, keep=None) -> dict[str, int]:
             "SELECT n.path, n.kind FROM files_new n JOIN journal j "
             "ON j.path = n.path WHERE j.state = ?", (ADDED,)).fetchall():
         if kind == "file" and keep(path):
-            db.execute("UPDATE files_new SET content_hash = ? WHERE path = ?",
-                       (content_hash(path), path))
+            db.execute("UPDATE files_new SET content_hash = ?, hash_source = ? "
+                       "WHERE path = ?",
+                       (content_hash(path), COMPARED, path))
 
     # Everything left differs in size or mtime, and only these are read.
     candidates = db.execute(
@@ -152,8 +163,13 @@ def build(store, keep=None) -> dict[str, int]:
         state, digest = resolve_candidate(path, kind, old_hash, keep)
         db.execute("INSERT INTO journal (path, state) VALUES (?, ?)",
                    (path, state))
-        db.execute("UPDATE files_new SET content_hash = ? WHERE path = ?",
-                   (digest, path))
+        # A hash written here came out of a comparison, whatever the verdict --
+        # even `unconfirmed` stored one so the *next* pass has something to
+        # compare against. `NULL` keeps a `NULL` source: the two columns are
+        # null together or not at all, which is what CP-17 gate 10 checks.
+        db.execute("UPDATE files_new SET content_hash = ?, hash_source = ? "
+                   "WHERE path = ?",
+                   (digest, COMPARED if digest is not None else None, path))
 
     return {state: count for state, count in db.execute(
         "SELECT state, COUNT(*) FROM journal GROUP BY state")}

@@ -41,7 +41,23 @@ TOOL = os.path.join(ROOT, "tests", "condition_coverage.py")
 # guards. Debt paid, not re-labelled. Never edit this pair without writing the
 # reason in TODO.md; a number that moves quietly is the thing the gate exists
 # to prevent.
-BASELINE_TOTAL, BASELINE_MISSED = 102, 65
+#
+# 2026-08-15, CP-17: 102 / 65 -> 105 / 66. Three new compound conditions
+# (`backfill.backfill`'s ceiling check and two in `coverage`), and the
+# detector immediately found a fourth in `Store.migrate` that had nothing
+# aimed at it. **The debt was paid, not carried:** needles were written for
+# all of them, and the migration pair turned out to be mutually redundant --
+# `PRAGMA table_info` already returns nothing for a table the role does not
+# have, so the role gate could not be observed failing and was removed. One
+# condition fewer than the naive count, and the one that stayed is aimed at.
+#
+# 105 / 66 -> 106 / 67 the same day: `backfill._has_hash_source` is a probe the
+# real catalogue asked for -- `status` opens L0 read-only, never migrates, and
+# the coverage query died with `no such column` on a store built before today.
+# The needle for it is in `mutate_cp17.py`, aimed at gate 18, so the *missed*
+# count does not move with the total: one condition more, none of it unaimed.
+# Debt paid the same hour it was taken.
+BASELINE_TOTAL, BASELINE_MISSED = 106, 66
 
 
 def main() -> int:

@@ -16,7 +16,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import embed, freshness, fusion, search, service, snapshot, view
+from . import (backfill, embed, freshness, fusion, search, service, snapshot,
+               view)
 from .lock import Locked, StoreLock
 from .scan import scan
 from .store import (L0, Store, data_home, db_path, initialise, l0_path,
@@ -141,6 +142,29 @@ def cmd_status(args: argparse.Namespace) -> int:
         if not rows:
             print("%-14s not built: morphofiles-graph update %s"
                   % ("", args.project))
+    # L1 coverage for this project's scope, read from the shared catalogue.
+    # Outside `with` above because the numbers live in L0, not in the project
+    # store. **This is CP-7B R8 again, one layer down:** a project where 51 of
+    # 4 773 files carry a hash printed nothing at all here, and so read exactly
+    # like one where every file does. `compared` and `backfilled` are shown
+    # apart because only the first can support `touched` today.
+    if l0_path().is_file():
+        with Store(l0_path(), read_only=True, role=L0) as l0:
+            cover = backfill.coverage(l0, service.union_keep())
+        if not cover["migrated"]:
+            # "Cannot tell" printed as "0 hashed" would be a worse lie than
+            # printing nothing at all. Name the reason and the one command
+            # that fixes it.
+            print("%-14s unknown: catalogue predates CP-17, "
+                  "run morphofiles-graph scan" % "l1")
+        else:
+            print("%-14s %d/%d hashed (%.0f %%), %d compared, %d backfilled"
+                  % ("l1", cover["hashed"], cover["in_scope"],
+                     cover["percent"], cover["compared"],
+                     cover["backfilled"]))
+            if cover["hashed"] < cover["in_scope"]:
+                print("%-14s %d cold row(s): morphofiles-graph backfill"
+                      % ("", cover["in_scope"] - cover["hashed"]))
     return 0
 
 
@@ -216,6 +240,50 @@ def _guard_or_refuse(store_db: Path, command: str) -> StoreLock | None:
               file=sys.stderr)
         _record_refusal(command, store_db, exc.holder)
         return None
+
+
+def cmd_backfill(args: argparse.Namespace) -> int:
+    """Writer against the shared L0 store. CP-17.
+
+    Its own command rather than a step inside `scan` (R1): the cheap pass has
+    to stay cheap, and a round that silently hashes a quarter of a gigabyte the
+    first time it meets a new scope is what M-3 already ruled out for
+    embedding.
+    """
+    store_db = l0_path()
+    if not store_db.is_file():
+        raise SystemExit("no catalogue yet: morphofiles-graph scan")
+    keep = service.union_keep()
+
+    # `--dry-run` reads, so it takes no guard: refusing to say how much work
+    # there is because someone else is writing would be a refusal with no
+    # reason behind it.
+    if args.dry_run:
+        with Store(store_db, read_only=True, role=L0) as store:
+            report = backfill.backfill(store, keep, dry_run=True)
+        print("%d file(s), %d byte(s) would be hashed"
+              % (report["files"], report["bytes"]))
+        return 0
+
+    barrier = _guard_or_refuse(store_db, "backfill")
+    if barrier is None:
+        return 2
+    try:
+        with Store(store_db, role=L0) as store:
+            report = backfill.backfill(store, keep, max_files=args.max_files)
+    finally:
+        barrier.release()
+    if report["refused"]:
+        # Exit 3, not 1: the work did not fail, it was declined on a limit the
+        # caller set. A script can tell "too big, raise the limit" from "the
+        # hashing broke" without parsing the message.
+        print(report["refused"], file=sys.stderr)
+        return 3
+    print("%d file(s) hashed of %d cold, %d byte(s)%s"
+          % (report["hashed"], report["files"], report["bytes"],
+             "" if not report["unreadable"]
+             else ", %d unreadable and left cold" % report["unreadable"]))
+    return 0
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
@@ -627,6 +695,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_scan.add_argument("root", nargs="?", default="~",
                         help="what to catalogue (default: the home area)")
     p_scan.set_defaults(func=cmd_scan)
+
+    p_backfill = sub.add_parser(
+        "backfill", help="hash in-scope rows a scan never had to read (CP-17)")
+    p_backfill.add_argument(
+        "--dry-run", action="store_true",
+        help="say how many files and bytes, and hash nothing")
+    p_backfill.add_argument(
+        "--max-files", type=int, default=None,
+        help="refuse rather than hash more than this many files")
+    p_backfill.set_defaults(func=cmd_backfill)
 
     p_search = sub.add_parser("search", help="lexical search over L2, or L0 names")
     p_search.add_argument("query")

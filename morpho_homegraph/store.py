@@ -30,7 +30,7 @@ from pathlib import Path
 
 from .lock import Unguarded, holds
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # Two roles, two schemas, and the split is the point. **L0 is shared**: it
 # describes the whole home area, it is identical for every project, and it
@@ -75,7 +75,16 @@ SCHEMA = {
               # nothing here at all, so its stored hash was NULL for every
               # row, every rewrite came back as `changed`, and the two-step
               # design was decoration from the day it was written.
-              "  content_hash TEXT)"),
+              "  content_hash TEXT,"
+              # CP-17: **how** the hash was obtained, because that is not the
+              # same claim as the hash itself. `compared` means `journal.build`
+              # took it after a real comparison between two passes.
+              # `backfilled` means CP-17 took it from the file as it is now,
+              # with no comparison behind it. Letting the second look like the
+              # first would forge evidence we do not have -- the same reason
+              # `unconfirmed` exists rather than guessing `changed`. NULL iff
+              # `content_hash` is NULL.
+              "  hash_source TEXT)"),
     # CP-3: the scope, per project. The first thing a project store holds
     # besides `meta`, and the right place for it -- a scope is per project,
     # while L0 and L1 are shared.
@@ -148,6 +157,27 @@ SCHEMA = {
                 "  vector BLOB NOT NULL,"
                 "  PRIMARY KEY (sha256, ord))"),
 }
+
+# Columns added to a table that already exists on disk. `CREATE TABLE IF NOT
+# EXISTS` is a no-op against a live store, so a column added to `SCHEMA` above
+# reaches a *new* store and no other -- and the store that matters is the one
+# already holding 485 735 rows. Each entry is (roles, DDL). `ADD COLUMN` is
+# additive, cheap and re-runnable, so `migrate()` stays idempotent; the guard
+# is the column list, not a version comparison, because a version number can
+# be bumped by an unrelated change and then this would not run. The role is
+# not named here: a role that has no such table reports no columns, and the
+# same emptiness that says "not mine" already says "nothing to alter".
+ADDED_COLUMNS = (
+    ("files", "hash_source",
+     "ALTER TABLE files ADD COLUMN hash_source TEXT",
+     # Rows that already carried a hash when the column arrived were put there
+     # by `journal.build`, which is the only writer that existed before CP-17 --
+     # so they *are* compared, and leaving them NULL would break the rule that
+     # a hash and its source are present together. Found on the real catalogue:
+     # 45 rows had a hash and no source until this ran.
+     "UPDATE files SET hash_source = 'compared' "
+     "WHERE content_hash IS NOT NULL AND hash_source IS NULL"),
+)
 
 # Milliseconds a reader or writer waits on a locked SQLite page before giving
 # up. This is the *page* lock, not the write barrier -- WAL keeps readers off
@@ -299,6 +329,30 @@ class Store:
                 *roles, ddl = roles_and_ddl
                 if self.role in roles:
                     self.db.execute(ddl)
+            # Columns on tables that already exist. Guarded by reading the
+            # table's own columns rather than by the version number: a version
+            # can be bumped by an unrelated change, and then a live store would
+            # silently keep the old shape.
+            #
+            # **One check, not two.** This first carried a role gate as well,
+            # and the mutation sweep showed the pair was mutually redundant --
+            # removing either left the suite green, because `PRAGMA table_info`
+            # returns nothing for a table the role does not have, which is the
+            # same skip the role gate produced. Two guards where one decides is
+            # two things to keep in step, and neither can be observed failing.
+            for table, column, ddl, backfill_ddl in ADDED_COLUMNS:
+                present = {row[1] for row in self.db.execute(
+                    "PRAGMA table_info(%s)" % table).fetchall()}
+                # `present` empty means the table is not in this role's schema:
+                # skip. Dropping that half makes `ALTER` raise `no such table`
+                # on a project store, which is what gate 17 pins.
+                if present and column not in present:
+                    self.db.execute(ddl)
+                    # The same transaction, not a later command: between the
+                    # two the store would hold rows with a hash and no source,
+                    # and any reader in that window sees an invariant broken.
+                    if backfill_ddl:
+                        self.db.execute(backfill_ddl)
             self.db.commit()
         current = int(self.get_meta("schema_version") or 0)
         if current < SCHEMA_VERSION:
