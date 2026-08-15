@@ -68,6 +68,11 @@ PERSONAL_DIGESTS = {
 }
 
 TOKEN = re.compile(r"[a-z0-9æøåäöü]+")
+
+# A path-shaped run: starts at `~` or `/`, or is a bare filename with a dot in
+# it. Gate 18 hands only these to the digest band, so an account name in a
+# *sentence* is allowed while the same name in a *path* is not.
+PATHISH = re.compile(r"(?:[~/][\w.@/+-]+|\b[\w@+-]+\.[\w.@+-]+)")
 NGRAM_MAX = 3
 
 # A single token that appears nowhere but the canary check, so proving the band
@@ -337,6 +342,73 @@ def t_norwegian_record_excluded(files):
           "TODO.md=%s FASIT-cppub.md=%s" % (todo_here, fasit_here))
 
 
+def t_history_is_clean():
+    """Gates 16-18: the commit messages travel with the repository too.
+
+    **The gap this closes was found by publishing, not by a gate.** Every one
+    of gates 1-15 inspects the working *tree*, and a repository is not only its
+    tree -- `git log` goes with it. Three commit messages named the account
+    inside a quoted failure example: harmless in intent, and still one machine's
+    layout written into a public log.
+
+    The distinction gates 5 and 6 already draw holds here unchanged. `/home` as
+    a bare mount is not an offender, and `/home/<account>` written as a
+    placeholder is the fix rather than the leak. What may not survive is a real
+    account name.
+    """
+    log = subprocess.run(["git", "-C", REPO, "log", "--format=%B"],
+                         capture_output=True, text=True, check=False).stdout
+    messages = [line for line in log.splitlines() if line.strip()]
+
+    # 17 first, and it is the same control gates 2, 4 and 8 carry: a band that
+    # cannot fire clears every input, and a green gate over a dead check is
+    # worse than no gate because it is quoted as evidence.
+    canary = _home_hits("a line naming /home/realname/x", "<canary>")
+    check("17 CONTROL: the /home band fires against commit text too",
+          len(canary) == 1, "canary produced %d hit(s)" % len(canary))
+    check("17b CONTROL: the history is actually being read",
+          len(messages) > 50, "%d non-empty message line(s)" % len(messages))
+
+    hits = [h for line in messages for h in _home_hits(line, "<commit>")]
+    check("16 no /home/<account> path in any commit message", not hits,
+          "%d hit(s)%s" % (len(hits), "" if not hits
+                           else "\n      " + "\n      ".join(hits[:6])))
+
+    # 18 is narrower than gate 3 on purpose, and the narrowing is a decision
+    # rather than a weakening. **The owner ruled on 2026-08-15 that the author
+    # name and email stay**: they sit in every commit's author field anyway,
+    # and a public history scrubbed anonymous is a stranger artefact than one
+    # with a name in it. What may not survive is the account name inside a
+    # *path*, because that is one machine's layout rather than a sentence about
+    # a person -- `~/.../<account>-crontab-...` was exactly that and has been
+    # rewritten, while the same name in prose stays.
+    #
+    # This file is subject to gate 3 like every other, which is why the rule is
+    # described and never demonstrated: writing the example out in full would
+    # make the gate that guards the tree fail on the gate that guards the log.
+    #
+    # Only the path-shaped substrings are handed to the digest band, so this
+    # file still never spells the account: the band does the identifying, the
+    # regex only decides *where* to look.
+    paths = [(line, m.group(0)) for line in messages
+             for m in PATHISH.finditer(line)]
+    personal = [h for _line, frag in paths
+                for h in _digest_hits(frag.replace("/", " ").replace("-", " "),
+                                      "<commit>", PERSONAL_DIGESTS)]
+    check("18 no account name inside a path in any commit message",
+          not personal,
+          "%d hit(s)%s" % (len(personal), "" if not personal
+                           else "\n      " + "\n      ".join(personal[:6])))
+    # 18b: the band has to be able to fire here too. The canary token stands in
+    # for the account, so the control needs no real identifier written down.
+    canary_path = "backup at ~/x/quaywiselanternfen-crontab.txt"
+    fired = [h for m in PATHISH.finditer(canary_path)
+             for h in _digest_hits(m.group(0).replace("/", " ").replace("-", " "),
+                                   "<canary>", CANARY_DIGEST)]
+    check("18b CONTROL: the in-path band fires", len(fired) == 1,
+          "canary produced %d hit(s)" % len(fired))
+
+
 def main():
     files = publishable_files()
     print("publishable tree: %d file(s)\n" % len(files))
@@ -345,6 +417,7 @@ def main():
     t_every_file_is_text_or_declared_binary(files)
     t_license_present(files)
     t_norwegian_record_excluded(files)
+    t_history_is_clean()
     failed = [n for n, ok, _ in results if not ok]
     print("\n%d/%d checks passed" % (len(results) - len(failed), len(results)))
     return 1 if failed else 0

@@ -54,6 +54,11 @@ from .store import PROJECT
 
 # Locked decision 9. The id is the directory under the model home, exactly as
 # transformers.js resolves it.
+# The model is third-party work and is named as such rather than treated as a
+# setting: `paraphrase-multilingual-MiniLM-L12-v2` is a sentence-transformers
+# model (Reimers and Gurevych, UKP Lab), distributed for transformers.js in the
+# `Xenova/` conversion. Nothing of it is vendored here -- it is fetched to a
+# local cache and the identifier is the credit.
 MODEL_ID = "Xenova/paraphrase-multilingual-MiniLM-L12-v2"
 DIM = 384
 

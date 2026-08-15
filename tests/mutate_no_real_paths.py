@@ -74,6 +74,29 @@ MUTATIONS = [
      r'            re.finditer(r"^\s*[0-9a-f]{64}\s+(\S+)\s*$", text, re.M)}',
      r'            re.finditer(r"^\s*[0-9a-f]{99}\s+(\S+)\s*$", text, re.M)}',
      "NOTICE declares binaries that exist in the tree"),
+
+    # -- the history gates (16-18), added after publishing found the gap ----
+    ("the history check reads nothing and clears everything",
+     "tests/test_no_real_paths.py",
+     '    log = subprocess.run(["git", "-C", REPO, "log", "--format=%B"],',
+     '    log = subprocess.run(["git", "-C", REPO, "log", "--format=%H"],',
+     "17b CONTROL: the history is actually being read"),
+
+    # Emptying `hits` also empties `messages` for gate 17b, which runs first
+    # and is the honest killer. Gate 16 can only go red on a *real* leak, and
+    # a mutation cannot plant one without editing history -- so 17b guarding
+    # the input is what makes 16 trustworthy, and this needle proves 17b works.
+    ("a leaked path in a commit message is not looked for",
+     "tests/test_no_real_paths.py",
+     '    hits = [h for line in messages for h in _home_hits(line, "<commit>")]',
+     '    hits = []  # mutated: commit messages are never scanned',
+     "17b CONTROL: the history is actually being read"),
+
+    ("the in-path band stops distinguishing a path from prose",
+     "tests/test_no_real_paths.py",
+     r'PATHISH = re.compile(r"(?:[~/][\w.@/+-]+|\b[\w@+-]+\.[\w.@+-]+)")',
+     r'PATHISH = re.compile(r"(?!)")  # mutated: nothing is path-shaped',
+     "18b CONTROL: the in-path band fires"),
 ]
 
 HERE = os.path.dirname(os.path.abspath(__file__))

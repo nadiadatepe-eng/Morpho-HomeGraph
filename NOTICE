@@ -25,3 +25,49 @@ machine has no network access for the check, so the chain is recorded rather
 than verified against upstream: if the local copy had drifted from 3ff923f,
 nothing here would show it. Stated because a chain with an unverified link is
 a fact about the chain, not a detail to leave out.
+
+
+--------------------------------------------------------------------------------
+
+OTHER WORK THIS PROJECT RESTS ON
+
+Nothing below is vendored here. It is listed because a dependency file records
+what to install, not who did the work, and "we borrowed nothing" is a claim
+worth being able to check.
+
+METHOD, CITED WHERE IT IS USED
+
+  Reciprocal rank fusion -- Cormack, Clarke and Buettcher, "Reciprocal Rank
+  Fusion outperforms Condorcet and individual Rank Learning Methods", SIGIR
+  2009. Implemented in `morpho_homegraph/fusion.py`; k = 60 is their reported
+  value, kept rather than tuned.
+
+MODEL, FETCHED AT RUN TIME AND NOT REDISTRIBUTED
+
+  `paraphrase-multilingual-MiniLM-L12-v2` -- a sentence-transformers model
+  (Reimers and Gurevych, UKP Lab), used through the `Xenova/` conversion for
+  transformers.js. Named in `morpho_homegraph/embed.py`.
+
+LIBRARIES
+
+  `@xenova/transformers` (npm) -- the embedding worker's runtime.
+  `numpy` -- cosine over float32 blobs in `embed.py`.
+  Python's standard library does the rest, SQLite and FTS5 included.
+
+CODE FROM THE PREDECESSOR PROJECT
+
+  Two test-harness files and one analysis tool were copied from `homegraph`,
+  an earlier project by the same author, and each says so in its own docstring
+  with the source commit:
+
+    tests/mutate.py                 the one mutation driver
+    tests/report.py                 the `check()` used by every gate file
+    tests/condition_coverage.py     compound-condition detector, carries
+                                    SOURCE_SHA256 and re-hashes its source
+
+  `morpho_homegraph/watch.py` is the same predecessor's inotify layer at commit
+  2ce3462d, with the parts that assumed no long-running service left behind.
+
+  `morpho_homegraph/lock.py` is explicitly NOT borrowed. The predecessor's
+  version had a window where two writers could both hold the guard, and the
+  file says so where a reader will meet it.

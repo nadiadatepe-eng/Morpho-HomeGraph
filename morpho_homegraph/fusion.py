@@ -23,6 +23,12 @@ alive -- measured in CP-5 and written down as its own rule.
 """
 from __future__ import annotations
 
+# Reciprocal rank fusion is Cormack, Clarke and Buettcher, "Reciprocal Rank
+# Fusion outperforms Condorcet and individual Rank Learning Methods" (SIGIR
+# 2009). The method is theirs; k = 60 is their reported value and is kept
+# rather than tuned, because a k chosen against our own 63-pair eval set would
+# fit that set instead of measuring the merge.
+#
 # Reciprocal rank fusion's constant. At 60, one list's rank-1 contribution is
 # 1/61 while two neighbouring ranks differ by 0.000264 -- so any list that is
 # added decides everything it touches, and a changed k makes CP-9E's three
