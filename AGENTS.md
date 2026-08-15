@@ -11,14 +11,15 @@
 - `morpho_homegraph/` owns the implementation and the `morphofiles-graph` command.
 - `tests/` owns the gates, the gold answers in `tests/gold/`, and the mutation harnesses.
 - `tools/` owns the measurement scripts (M-1 … M-6, equivalence, eval).
-- `docs/` owns the archify JSON sources; the rendered HTML lives in `~/Dokumenter/`.
+- `docs/` owns the archify JSON sources; the rendered HTML lives outside the repo, in the
+  owner's local documents directory.
 - `view/` and `NOTICE` carry morpho's Apache-2.0 obligation.
 - `TODO.md` owns checkpoints, locked decisions, open threads, and measured results. It is
   the source; the global memory file is only a pointer.
 
 ## Local Contracts
 
-- **No remote at all.** Not "unpushed" — not connected. Nadi's decision 2026-08-04: private
+- **No remote at all.** Not "unpushed" — not connected. Owner's decision 2026-08-04: private
   first, public last. `CP-PUB` gates real paths *before* visibility changes.
 - Mark work done with a commit sha or a measured number. "Done" without evidence gets
   quoted onward as fact.
@@ -39,7 +40,7 @@
 - One checkpoint at a time, `TODO.md` updated at the checkpoint rather than at the end.
 - Run the mutation harness for a checkpoint, not just its tests. A green gate that no
   mutation can turn red is decoration.
-- Open threads in `TODO.md` are decisions for Nadi, not backlog to clear unasked.
+- Open threads in `TODO.md` are decisions for the owner, not backlog to clear unasked.
 
 ## Verification
 
