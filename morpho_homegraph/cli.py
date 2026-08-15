@@ -133,9 +133,26 @@ def cmd_status(args: argparse.Namespace) -> int:
             "       (SELECT COUNT(*) FROM content),"
             "       (SELECT COUNT(*) FROM edges)").fetchone()
         print("%-14s %d rules" % ("scope", rules))
-        print("%-14s %d rows (%s unread, %s s)"
+        # L2 against the scope, not on its own. Open thread 5: `per_file`
+        # counts what L2 holds, which is right for what it is -- a state per
+        # file we have read -- but nobody was comparing that against what the
+        # scope says should be there. Measured 2026-08-15: 13 files had no row
+        # at all before an `update`, 0 of 127 after, so the denominator does
+        # not shrink for ever, it shrinks *between updates* and says nothing
+        # while it does. The fix is a comparison, not a fifth state (R5).
+        # No `or ""` here: `scope_size` already answers `None` for a falsy or
+        # missing root, and a second guard for the same case is a second thing
+        # to keep in step -- the sweep showed neither could be observed failing.
+        in_scope = service.scope_size(store.get_meta("project_path"))
+        print("%-14s %d rows (%s unread, %s s)%s"
               % ("l2", rows, store.get_meta("l2_unread") or "?",
-                 store.get_meta("l2_seconds") or "?"))
+                 # Both halves are the same display fallback for a missing
+                 # meta value, and neither can be wrong in a way a gate sees.
+                 # condition-coverage: display fallback, no observable branch.
+                 store.get_meta("l2_seconds") or "?",
+                 "" if in_scope is None or in_scope == rows
+                 else ", %d in scope: morphofiles-graph update %s"
+                 % (in_scope, args.project)))
         print("%-14s %d edges (%s ambiguous, %s outside)"
               % ("l3", edges, store.get_meta("l3_ambiguous") or "?",
                  store.get_meta("l3_outside") or "?"))

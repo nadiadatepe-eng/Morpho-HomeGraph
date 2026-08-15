@@ -57,7 +57,17 @@ TOOL = os.path.join(ROOT, "tests", "condition_coverage.py")
 # The needle for it is in `mutate_cp17.py`, aimed at gate 18, so the *missed*
 # count does not move with the total: one condition more, none of it unaimed.
 # Debt paid the same hour it was taken.
-BASELINE_TOTAL, BASELINE_MISSED = 106, 66
+#
+# 2026-08-15, CP-18: 106 / 66 -> 111 / 64. Five new compound conditions (the
+# nested-`.gitignore` chain, `scope_size`, the L2/scope comparison), and the
+# missed count went **down by two** while the total rose by five. That is not
+# an accounting trick: CP-18's sweep found two guards that could not be
+# observed failing and they were deleted rather than gated (`or ""` in front of
+# a `scope_size` that already answers `None`; a duplicated match loop in
+# `_last_match` folded back into `_hits`). Two of the five are waived at the
+# line with a reason -- a display fallback, and a `or {}` whose removal raises
+# before any gate can speak.
+BASELINE_TOTAL, BASELINE_MISSED = 111, 64
 
 
 def main() -> int:

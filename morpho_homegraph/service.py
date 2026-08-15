@@ -131,6 +131,36 @@ def union_keep():
     return keep
 
 
+def scope_size(root: str) -> int | None:
+    """How many files the project's scope selects on disk right now.
+
+    `None` when the root is gone or unreadable, which `status` prints as no
+    comparison at all -- "the project moved" and "L2 is behind" are different
+    facts, and showing the second for the first would send the reader to run
+    `update` against a directory that is not there.
+
+    Walked rather than read from the `scope` table, for CP-15 R1's reason: a
+    stored scope reused is CP-3's bug in new clothes, because `.gitignore` gets
+    edited and a folder becomes a repo. This is the same recomputation
+    `union_keep` does, and it costs one walk of one project.
+    """
+    if not root or not os.path.isdir(root):
+        return None
+    selected = chosen_scope(root)
+    total = 0
+    for current, dirs, files in os.walk(root):
+        # Do not descend into a directory the scope excludes: for a repo that
+        # is `.git`, and for a nested `.gitignore` with `*` it is the whole
+        # cache. Walking them anyway would cost more than the count is worth,
+        # and `contains` would reject every file individually.
+        dirs[:] = [d for d in dirs
+                   if selected.contains(os.path.join(current, d), is_dir=True)]
+        total += sum(1 for name in files
+                     if selected.contains(os.path.join(current, name),
+                                          is_dir=False))
+    return total
+
+
 # -- the one definition of an update ---------------------------------------
 
 def build_layers(store: Store, project_id: str) -> dict:

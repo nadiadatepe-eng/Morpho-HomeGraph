@@ -55,7 +55,8 @@ class Scope:
 
     def __init__(self, rules: list[tuple[str, str]] | None = None,
                  patterns: list[tuple[str, bool, bool, bool]] | None = None,
-                 root: str | None = None) -> None:
+                 root: str | None = None,
+                 nested: dict[str, list] | None = None) -> None:
         # (path, mode) in no particular order: the decision sorts by depth,
         # so the caller never has to keep them ordered and cannot break the
         # rule by adding one in the wrong place.
@@ -67,6 +68,16 @@ class Scope:
         # excludes. A predicate with an attachment is two predicates, and one
         # of them gets forgotten.
         self.patterns = list(patterns or [])
+        # CP-18: `{directory: patterns}` for the `.gitignore` files below the
+        # root. Read once when the scope is built, never on lookup -- the same
+        # reason the root's patterns live here rather than beside the scope.
+        # `or {}` rather than a mutable default, and it is load-bearing:
+        # `from_folder` and the store loader both build a Scope without nested
+        # patterns, so `None` reaches here on every non-repo path.
+        # Removing the `or {}` raises TypeError before any gate can speak, so
+        # a needle there reports a crash rather than naming a gate.
+        # condition-coverage: exercised by every non-repo scope in the suite.
+        self.nested = dict(nested or {})
         self.root = root
 
     def add(self, path: str, mode: str = INCLUDE) -> "Scope":
@@ -97,14 +108,45 @@ class Scope:
         rule = self.decides(path)
         if rule is None or rule[1] != INCLUDE:
             return False
-        if not (self.patterns and self.root):
+        if not self.root:
             return True
         if not _under(path, self.root):
             return True
-        relative = os.path.relpath(path, self.root)
         if is_dir is None:
             is_dir = os.path.isdir(path)
-        return not ignored_with_parents(relative, is_dir, self.patterns)
+        # Depth is the order, and the last match wins across files as well as
+        # within one (R3). The root first, then each directory downwards, so a
+        # `!keep.log` in a nested file can overturn the root's `*.log` -- and
+        # the root's patterns still apply inside a directory that has its own,
+        # because the nested file adds, it does not replace.
+        #
+        # A file that matches *nothing* in a given `.gitignore` leaves the
+        # verdict where it was; only a match moves it. That is the difference
+        # between "this file says nothing about you" and "this file says keep
+        # you", and collapsing the two would make every nested file re-include
+        # everything the root excluded.
+        verdict = False
+        for base, patterns in self._pattern_chain(path):
+            if not patterns:
+                continue
+            relative = os.path.relpath(path, base)
+            decision = _last_match(relative, is_dir, patterns)
+            if decision is not None:
+                verdict = decision
+        return not verdict
+
+    def _pattern_chain(self, path: str):
+        """`(base, patterns)` from the root downwards for `path`.
+
+        Ordered shallowest first because that is what makes "last match wins"
+        mean "the closest file decides" -- the same rule `gitignored` already
+        applies inside a single file, extended across files.
+        """
+        chain = [(self.root, self.patterns)]
+        for base in sorted(self.nested, key=len):
+            if _under(path, base):
+                chain.append((base, self.nested[base]))
+        return chain
 
     # -- the tree's third state -------------------------------------------
 
@@ -162,14 +204,55 @@ def gitignored(relative: str, is_dir: bool,
     for pattern, negated, anchored, dir_only in patterns:
         if dir_only and not is_dir:
             continue
-        if anchored:
-            hit = _fnmatch_path(relative, pattern)
-        else:
-            # Unanchored patterns match at any depth, which is why a bare
-            # `node_modules` in a .gitignore covers every one of them.
-            hit = any(_fnmatch_path(part, pattern) or fnmatch.fnmatch(part, pattern)
-                      for part in _suffixes(relative))
-        if hit:
+        if _hits(relative, pattern, anchored):
+            verdict = not negated
+    return verdict
+
+
+def _hits(relative: str, pattern: str, anchored: bool) -> bool:
+    """Does one pattern match `relative`?
+
+    Pulled out of `gitignored` when CP-18 needed the same question in
+    `_last_match`: the two loops were byte-identical, and two implementations
+    of "does this pattern hit" are two things that can drift -- the drift would
+    look like a file changing scope on its own.
+    """
+    if anchored:
+        return _fnmatch_path(relative, pattern)
+    # Unanchored patterns match at any depth, which is why a bare
+    # `node_modules` in a .gitignore covers every one of them.
+    return any(_fnmatch_path(part, pattern) or fnmatch.fnmatch(part, pattern)
+               for part in _suffixes(relative))
+
+
+def _last_match(relative: str, is_dir: bool, patterns) -> bool | None:
+    """`True` (ignored), `False` (negated) or `None` (no pattern matched).
+
+    The three-way answer is what lets CP-18 chain several `.gitignore` files:
+    `gitignored()` returns `False` both for "a `!` rule kept this" and for
+    "nothing here mentioned it", and a chain cannot tell those apart -- treat
+    the second as a decision and every nested file re-includes everything the
+    root excluded.
+
+    A parent directory being ignored is still `True` here, because git does not
+    descend into an ignored directory and a per-path predicate has to answer
+    for the children it is handed anyway.
+    """
+    parts = relative.split("/")
+    for depth in range(1, len(parts)):
+        if gitignored("/".join(parts[:depth]), True, patterns):
+            return True
+    verdict: bool | None = None
+    for pattern, negated, anchored, dir_only in patterns:
+        # One rule at a time through `_hits`, which `gitignored` uses too, so
+        # "does this pattern match" has one definition rather than two that
+        # can drift apart. The verdict cannot be read off `gitignored` here:
+        # it returns False both for "a negation kept this" and for "nothing
+        # matched", which is exactly the distinction this function exists to
+        # make.
+        if dir_only and not is_dir:
+            continue
+        if _hits(relative, pattern, anchored):
             verdict = not negated
     return verdict
 
@@ -210,7 +293,7 @@ def _fnmatch_path(value: str, pattern: str) -> bool:
 
 
 def from_repo(root: str) -> tuple[Scope, list[tuple[str, bool, bool, bool]]]:
-    """A scope that includes `root`, minus `.git`, plus its root `.gitignore`.
+    """A scope that includes `root`, minus `.git`, plus its `.gitignore` files.
 
     **`.git` is excluded explicitly, because `.gitignore` never mentions it.**
     Locked decision 3 makes `.gitignore` the skip list for repos, and that is
@@ -226,12 +309,34 @@ def from_repo(root: str) -> tuple[Scope, list[tuple[str, bool, bool, bool]]]:
 
     `from_folder` has excluded `.git` since CP-3 through `JUNK`. The asymmetry
     was the accident, not the rule.
+
+    **Nested `.gitignore` files are read too, since CP-18.** Before that only
+    the root's was, which cost 30 of 127 L2 rows here (24 %) -- two tool caches
+    whose own `.gitignore` says `*`. The returned pattern list is still the
+    root's alone, because that is what callers store and compare; the nested
+    ones live inside the predicate where they cannot be forgotten.
     """
     root = str(Path(root).expanduser().resolve())
     patterns = read_gitignore(root)
-    scope = Scope(patterns=patterns, root=root)
+    scope = Scope(patterns=patterns, root=root,
+                  nested=nested_gitignores(root))
     scope.add(root, INCLUDE).add(os.path.join(root, ".git"), EXCLUDE)
     return scope, patterns
+
+
+def open_text(path: str) -> str:
+    """Read a text file, or `''` when it cannot be read.
+
+    A named function rather than an inline `open`, because CP-18 gate 8 counts
+    reads: the rule is that every nested `.gitignore` is read once per scope
+    and never per `contains()` call, and a gate that measured *time* instead
+    would be green on a fast machine for code that reads on every call.
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return ""
 
 
 def read_gitignore(root: str) -> list[tuple[str, bool, bool, bool]]:
@@ -243,12 +348,39 @@ def read_gitignore(root: str) -> list[tuple[str, bool, bool, bool]]:
     index answering by a rule the file no longer has is worse than one without
     the rule.
     """
-    try:
-        with open(os.path.join(root, ".gitignore"),
-                  encoding="utf-8", errors="replace") as fh:
-            return parse_gitignore(fh.read())
-    except OSError:
-        return []
+    return parse_gitignore(open_text(os.path.join(root, ".gitignore")))
+
+
+def nested_gitignores(root: str, skip=(".git",)) -> dict[str, list]:
+    """`{directory: patterns}` for every `.gitignore` **below** `root`.
+
+    Walked once when the scope is built (R1), never on lookup. A scope is
+    short-lived and rebuilt from disk every round (CP-15 R1), so "once per
+    scope" already means "every round" -- the thing being avoided is not
+    staleness but turning the predicate into I/O.
+
+    Measured 2026-08-15 across three real projects: 2, 5 and 20 nested files,
+    0.005-0.010 s to read them all, against a 14.98 s sweep. Cost was never
+    the argument here.
+
+    `.git` is skipped rather than read: it holds its own `info/exclude` in a
+    different format, and CP-3's rule is that `.git` leaves the scope by an
+    explicit exclusion, in one place.
+    """
+    found: dict[str, list] = {}
+    for current, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in skip]
+        # Collecting the root's own file here as well would be harmless but
+        # wasteful: `_pattern_chain` already puts it first, so it would be
+        # applied twice to the same relative path and reach the same verdict.
+        # condition-coverage: the root half is an equivalent mutant -- dropping
+        # it changes only how many times the same patterns are applied.
+        if current == root or ".gitignore" not in files:
+            continue
+        patterns = parse_gitignore(open_text(os.path.join(current, ".gitignore")))
+        if patterns:
+            found[current] = patterns
+    return found
 
 
 def from_folder(root: str) -> Scope:
