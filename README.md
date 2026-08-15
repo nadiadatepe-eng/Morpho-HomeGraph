@@ -34,6 +34,7 @@ Python dependency. Everything else is the standard library, SQLite and FTS5
 included.
 
     pip install -e .
+    npm install        # only for the semantic layer
 
 ## Running the checks
 
@@ -41,6 +42,13 @@ included.
     python3 tests/mutate_cp<n>.py                      # one checkpoint's needles
     bash tools/sweep_all.sh                            # every harness, resumable
     python3 tests/condition_coverage.py                # compound conditions
+
+Two notes for a fresh clone, both measured on one. The semantic gates need
+`npm install` first: without it `embed` refuses, and five modules fail on that
+refusal rather than on a defect. And `tests/test_no_real_paths.py` is the
+publication gate — its last check asserts that the deliberately excluded
+working record still exists *locally*, which is false in a clone by design. Run
+that one in the working copy, not in a checkout.
 
 The gates are written before the code they grade, and each one has mutations
 aimed at it: a green gate that no mutation can turn red is decoration. The full
