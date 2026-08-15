@@ -57,9 +57,10 @@ MUTATIONS = [
     ("a new file is not hashed on the way in, so nothing is ever warm",
      "morpho_homegraph/journal.py",
      "        if kind == \"file\" and keep(path):\n"
-     "            db.execute(\"UPDATE files_new SET content_hash = ? "
-     "WHERE path = ?\",\n"
-     "                       (content_hash(path), path))",
+     "            db.execute(\"UPDATE files_new SET content_hash = ?, "
+     "hash_source = ? \"\n"
+     "                       \"WHERE path = ?\",\n"
+     "                       (content_hash(path), COMPARED, path))",
      "        if False:  # mutated: added files stay unhashed\n"
      "            db.execute(\"UPDATE files_new SET content_hash = ? "
      "WHERE path = ?\",\n"

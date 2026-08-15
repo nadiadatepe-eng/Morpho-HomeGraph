@@ -238,10 +238,8 @@ def _last_match(relative: str, is_dir: bool, patterns) -> bool | None:
     descend into an ignored directory and a per-path predicate has to answer
     for the children it is handed anyway.
     """
-    parts = relative.split("/")
-    for depth in range(1, len(parts)):
-        if gitignored("/".join(parts[:depth]), True, patterns):
-            return True
+    if _parent_ignored(relative, patterns):
+        return True
     verdict: bool | None = None
     for pattern, negated, anchored, dir_only in patterns:
         # One rule at a time through `_hits`, which `gitignored` uses too, so
@@ -257,8 +255,8 @@ def _last_match(relative: str, is_dir: bool, patterns) -> bool | None:
     return verdict
 
 
-def ignored_with_parents(relative: str, is_dir: bool, patterns) -> bool:
-    """Is `relative`, or any directory above it, ignored?
+def _parent_ignored(relative: str, patterns) -> bool:
+    """Is any directory above `relative` ignored?
 
     **Git never asks this, and that is the point.** It does not descend into an
     ignored directory, so it is never handed the children -- the question does
@@ -266,12 +264,18 @@ def ignored_with_parents(relative: str, is_dir: bool, patterns) -> bool:
     without walking the parents, `.venv/` in a `.gitignore` excludes exactly
     one directory and none of the 304 files under it. Measured on ~/homegraph
     2026-08-04, that was most of what CP-4 still called `binary`.
+
+    One definition, called from `_last_match` and from nowhere else. It began
+    as `ignored_with_parents`, which CP-18 left with **no production caller**
+    when `contains` started going through `_last_match` instead -- the full
+    sweep found it as a surviving mutation, because a function nothing calls
+    cannot be broken in a way a gate can see. Removing it rather than keeping
+    a second entry point is [[mechanisms-need-production-callers]] applied to
+    our own leftovers.
     """
     parts = relative.split("/")
-    for depth in range(1, len(parts)):
-        if gitignored("/".join(parts[:depth]), True, patterns):
-            return True
-    return gitignored(relative, is_dir, patterns)
+    return any(gitignored("/".join(parts[:depth]), True, patterns)
+               for depth in range(1, len(parts)))
 
 
 def _suffixes(relative: str) -> list[str]:

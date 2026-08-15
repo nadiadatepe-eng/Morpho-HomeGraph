@@ -23,8 +23,9 @@ MUTATIONS = [
     # tally still adds up.
     ("new files in scope are never hashed",
      "morpho_homegraph/journal.py",
-     '            db.execute("UPDATE files_new SET content_hash = ? WHERE path = ?",\n'
-     "                       (content_hash(path), path))",
+     '            db.execute("UPDATE files_new SET content_hash = ?, hash_source = ? "\n'
+     '                       "WHERE path = ?",\n'
+     "                       (content_hash(path), COMPARED, path))",
      "            pass  # mutated: nothing is ever hashed on the way in",
      "6  a pure touch is touched, and touched can fire"),
 
@@ -37,7 +38,9 @@ MUTATIONS = [
     ("the unchanged rows lose their hash on the way through",
      "morpho_homegraph/journal.py",
      '        "UPDATE files_new SET content_hash = ("\n'
-     '        "  SELECT o.content_hash FROM files o WHERE o.path = files_new.path)"\n'
+     '        "  SELECT o.content_hash FROM files o WHERE o.path = files_new.path),"\n'
+     '        "  hash_source = ("\n'
+     '        "  SELECT o.hash_source FROM files o WHERE o.path = files_new.path)"\n'
      '        " WHERE path IN (SELECT path FROM journal WHERE state = ?)",\n'
      "        (UNCHANGED,))",
      "        \"SELECT 1\", ())  # mutated: the hash is dropped each pass",

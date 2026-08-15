@@ -43,27 +43,32 @@ MUTATIONS = [
     # green and L2 grows by 550 rows.
     ("contains() ignores the patterns, as it did before the seam was wired",
      "morpho_homegraph/scope.py",
-     "        if not (self.patterns and self.root):\n"
+     "        if not self.root:\n"
      "            return True",
      "        if True:  # mutated\n"
      "            return True",
      "18 an ignored file is outside the scope, not merely matched"),
 
+    # Was aimed at `ignored_with_parents`, which the full sweep found had **no
+    # production caller left** after CP-18 routed `contains` through
+    # `_last_match`. The function is gone; the behaviour it guarded is now the
+    # first line of `_last_match`, and this needle attacks it there. A
+    # surviving mutation in dead code is the sweep reporting the deadness, not
+    # a gap in the gates.
     ("only the path itself is tested, never its parent directories",
      "morpho_homegraph/scope.py",
-     "    parts = relative.split(\"/\")\n"
-     "    for depth in range(1, len(parts)):\n"
-     "        if gitignored(\"/\".join(parts[:depth]), True, patterns):\n"
-     "            return True\n"
-     "    return gitignored(relative, is_dir, patterns)",
-     "    return gitignored(relative, is_dir, patterns)  # mutated",
+     "    if _parent_ignored(relative, patterns):\n"
+     "        return True",
+     "    if False:  # mutated: parents are never consulted\n"
+     "        return True",
      "19 a file under an ignored directory is outside too"),
 
     ("the parent walk reports directories as files",
      "morpho_homegraph/scope.py",
-     "        if gitignored(\"/\".join(parts[:depth]), True, patterns):",
-     "        if gitignored(\"/\".join(parts[:depth]), False, patterns):"
-     "  # mutated",
+     "    return any(gitignored(\"/\".join(parts[:depth]), True, patterns)\n"
+     "               for depth in range(1, len(parts)))",
+     "    return any(gitignored(\"/\".join(parts[:depth]), False, patterns)\n"
+     "               for depth in range(1, len(parts)))  # mutated",
      "19 a file under an ignored directory is outside too"),
 
     ("the patterns are frozen into the store instead of re-read",
@@ -134,12 +139,18 @@ MUTATIONS = [
     # other pattern behaves, and the run looks correct.
     ("the first matching pattern decides, not the last",
      "morpho_homegraph/scope.py",
-     "        if hit:\n"
+     "        if _hits(relative, pattern, anchored):\n"
      "            verdict = not negated\n"
-     "    return verdict",
-     "        if hit:\n"
+     "    return verdict\n"
+     "\n"
+     "\n"
+     "def _hits(",
+     "        if _hits(relative, pattern, anchored):\n"
      "            return not negated  # mutated: first match wins\n"
-     "    return verdict",
+     "    return verdict\n"
+     "\n"
+     "\n"
+     "def _hits(",
      "8  a later negation puts the file back"),
 
     ("negation is read as an ordinary pattern",
@@ -156,10 +167,26 @@ MUTATIONS = [
 
     ("a directory-only pattern matches files too",
      "morpho_homegraph/scope.py",
+     # Anchored on `gitignored`'s copy specifically: `_last_match` carries the
+     # same two lines, and the full sweep reported this needle as AMBIGUOUS
+     # until the following line was included. An ambiguous needle mutates
+     # whichever copy comes first and silently leaves the other untested.
      "        if dir_only and not is_dir:\n"
-     "            continue",
+     "            continue\n"
+     "        if _hits(relative, pattern, anchored):\n"
+     "            verdict = not negated\n"
+     "    return verdict\n"
+     "\n"
+     "\n"
+     "def _hits(",
      "        if False:  # mutated: the trailing slash means nothing\n"
-     "            continue",
+     "            continue\n"
+     "        if _hits(relative, pattern, anchored):\n"
+     "            verdict = not negated\n"
+     "    return verdict\n"
+     "\n"
+     "\n"
+     "def _hits(",
      "10 a trailing slash matches a directory and not a file"),
 
     ("* crosses directory separators like ** does",
@@ -205,10 +232,9 @@ MUTATIONS = [
 
     ("a repo with no .gitignore gets one from somewhere",
      "morpho_homegraph/scope.py",
-     "    except OSError:\n"
-     "        return []",
-     "    except OSError:\n"
-     '        return parse_gitignore("*\\n")  # mutated: skip everything',
+     '    return parse_gitignore(open_text(os.path.join(root, ".gitignore")))',
+     '    return parse_gitignore(open_text(os.path.join(root, ".gitignore"))'
+     ' or "*\\n")  # mutated: no file means skip everything',
      "13b a repo with no .gitignore is a scope with no skip list"),
 ]
 
