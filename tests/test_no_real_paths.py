@@ -392,6 +392,32 @@ def t_history_is_clean():
     # regex only decides *where* to look.
     paths = [(line, m.group(0)) for line in messages
              for m in PATHISH.finditer(line)]
+    # 19: the file list in history, not only in the tree. **This gate exists
+    # because the published repository had the excluded record in it.**
+    # `.gitignore` stops new commits; it does not remove what was committed
+    # before the rule existed, and gates 14 and 15 both looked only at the
+    # current tree. Measured 2026-08-15, minutes after the first push: 20
+    # excluded files were still readable from history, `TODO.md` across 78
+    # commits, 345 of its lines carrying a home path.
+    #
+    # `git ls-files` cannot answer this -- it sees the last tree. Only walking
+    # every commit does.
+    listed = subprocess.run(
+        ["git", "-C", REPO, "log", "--all", "--name-only",
+         "--pretty=format:"],
+        capture_output=True, text=True, check=False).stdout
+    ever = {line.strip() for line in listed.splitlines() if line.strip()}
+    leaked = sorted(p for p in ever
+                    if p == "TODO.md"
+                    or (p.startswith("tests/gold/FASIT-") and p.endswith(".md")))
+    check("19 the excluded record was never committed, in any commit",
+          not leaked,
+          "%d file(s) readable from history%s"
+          % (len(leaked), "" if not leaked
+             else "\n      " + "\n      ".join(leaked[:6])))
+    check("19b CONTROL: the history file list is actually being read",
+          len(ever) > 40, "%d distinct path(s) across all commits" % len(ever))
+
     personal = [h for _line, frag in paths
                 for h in _digest_hits(frag.replace("/", " ").replace("-", " "),
                                       "<commit>", PERSONAL_DIGESTS)]

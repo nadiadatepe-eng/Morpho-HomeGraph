@@ -97,6 +97,23 @@ MUTATIONS = [
      r'PATHISH = re.compile(r"(?:[~/][\w.@/+-]+|\b[\w@+-]+\.[\w.@+-]+)")',
      r'PATHISH = re.compile(r"(?!)")  # mutated: nothing is path-shaped',
      "18b CONTROL: the in-path band fires"),
+
+    # Gate 19 exists because the published repo carried the excluded record in
+    # its history. These two make sure it cannot go quiet the same way.
+    ("the history file list is never read, so nothing can leak",
+     "tests/test_no_real_paths.py",
+     '    ever = {line.strip() for line in listed.splitlines() if line.strip()}',
+     '    ever = set()  # mutated: history is never inspected',
+     "19b CONTROL: the history file list is actually being read"),
+
+    ("the excluded-file match stops recognising the FASIT files",
+     "tests/test_no_real_paths.py",
+     '                    or (p.startswith("tests/gold/FASIT-") and p.endswith(".md")))',
+     '                    or False)  # mutated: only TODO.md counts',
+     # Gate 19 can only go red on a *real* leak, and a mutation cannot plant
+     # one without editing history -- so the honest killer is the control that
+     # guards its input. Same shape as gate 16 and 17b.
+     "17b CONTROL: the history is actually being read"),
 ]
 
 HERE = os.path.dirname(os.path.abspath(__file__))
