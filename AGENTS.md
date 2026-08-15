@@ -34,6 +34,12 @@
   a layer, and revise mutation needles rather than trusting them.
 - Needles written with escaped quotes are invisible to the condition detector. Use single
   quotes.
+- A stored hash carries `hash_source`: `compared` came from a real comparison between two
+  passes, `backfilled` from reading the file with no comparison behind it. The two are never
+  merged, and `content_hash` and `hash_source` are null together or not at all.
+- A schema change reaches a live store only through `ADDED_COLUMNS`; `CREATE TABLE IF NOT
+  EXISTS` is a no-op against a file that already exists. A read-only open never migrates, so
+  readers must degrade and say why rather than raise.
 
 ## Work Guidance
 
@@ -52,7 +58,7 @@
 
 ## Child DOX Index
 
-- `morpho_homegraph/` — package, CLI, layers L0–L5, service.
+- `morpho_homegraph/` — package, CLI, layers L0–L5, service, backfill.
 - `tests/` — gates, gold answers, mutation harnesses.
 - `tools/` — measurement scripts.
 - `docs/` — archify diagram sources.
