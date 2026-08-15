@@ -139,6 +139,29 @@ def cmd_status(args: argparse.Namespace) -> int:
         print("%-14s %d edges (%s ambiguous, %s outside)"
               % ("l3", edges, store.get_meta("l3_ambiguous") or "?",
                  store.get_meta("l3_outside") or "?"))
+        # L4, both halves. Open thread 7, and the same rule as the two lines
+        # above: a project that was never embedded read exactly like one that
+        # was, because only `search --semantic` said so -- and nobody runs a
+        # search to find out whether searching will work.
+        #
+        # `search.state` rather than a row count, because it already separates
+        # the three answers this line needs -- built, never built, and built
+        # against an older L2. Counting rows myself would report a stale index
+        # as a healthy one, which is the failure this whole line exists to stop.
+        lexical, indexed, expected_rows = search.state(store)
+        print("%-14s %s (%d/%d rows)%s"
+              % ("l4 lexical", lexical, indexed, expected_rows,
+                 "" if lexical == "ok"
+                 else ": morphofiles-graph update %s" % args.project))
+        embedded, expected = embed.coverage(store)
+        if not expected:
+            print("%-14s nothing to embed yet" % "l4 semantic")
+        else:
+            print("%-14s %d/%d chunks (%.0f %%)%s"
+                  % ("l4 semantic", embedded, expected,
+                     100.0 * embedded / expected,
+                     "" if embedded == expected
+                     else ": morphofiles-graph embed %s" % args.project))
         if not rows:
             print("%-14s not built: morphofiles-graph update %s"
                   % ("", args.project))

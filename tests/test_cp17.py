@@ -286,6 +286,29 @@ def gates_coverage(work):
           and "0 compared" in warm and "3 backfilled" in warm,
           line or "absent")
 
+    # 19, 20: open thread 7, closed with the same rule as gate 11 one layer up.
+    # Before this, a project that was never embedded printed nothing about L4
+    # at all, so it read exactly like one that was fully embedded -- only
+    # `search --semantic` said otherwise, and nobody runs a search to find out
+    # whether searching will work.
+    cli("update", project_id)
+    built = cli("status", project_id).stdout
+    # The row count, not just the word `ok`: a line that hard-codes "ok" and
+    # zero rows satisfies "l4 lexical" and "ok (" alike, and that mutation
+    # survived the first sweep. There are three files in scope here, so the
+    # count is the part that cannot be faked.
+    check("19 status reports the lexical index state and its row count",
+          "l4 lexical" in built and "ok (3/3 rows)" in built,
+          [ln for ln in built.splitlines() if "l4 lexical" in ln] or "absent")
+    # The semantic half is never embedded here (embedding needs the Node
+    # worker), so this is the un-embedded case -- which is the one that used to
+    # be invisible.
+    semantic = [ln for ln in built.splitlines() if "l4 semantic" in ln]
+    check("20 status reports embedding coverage, and names the command when short",
+          bool(semantic)
+          and ("0/" in semantic[0] or "nothing to embed" in semantic[0]),
+          semantic or "absent")
+
 
 # -- 13, 14: the ceiling is stated before the work -------------------------
 

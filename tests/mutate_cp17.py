@@ -116,6 +116,21 @@ MUTATIONS = [
      "    if False:  # mutated: --dry-run does the work anyway\n        return report",
      "13 backfill states file count and bytes before hashing"),
 
+    # -- the L4 lines (open thread 7) --------------------------------------
+    ("the lexical line reports a stale index as healthy",
+     "morpho_homegraph/cli.py",
+     "        lexical, indexed, expected_rows = search.state(store)",
+     "        lexical, indexed, expected_rows = 'ok', 0, 0  # mutated: never asked",
+     "19 status reports the lexical index state and its row count"),
+
+    ("the semantic line is dropped when nothing is embedded",
+     "morpho_homegraph/cli.py",
+     "        if not expected:\n"
+     "            print(\"%-14s nothing to embed yet\" % \"l4 semantic\")",
+     "        if True:  # mutated: an unembedded project says nothing at all\n"
+     "            pass",
+     "20 status reports embedding coverage, and names the command when short"),
+
     # -- the coverage line -------------------------------------------------
     ("status counts backfilled hashes as compared",
      "morpho_homegraph/backfill.py",
