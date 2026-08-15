@@ -47,6 +47,14 @@ aimed at it: a green gate that no mutation can turn red is decoration. The full
 sweep reports survivors, crashes and misattributions separately, because those
 are three different problems.
 
+## Why it looks like this
+
+`DECISIONS.md` carries the design record: the decisions that would otherwise
+look arbitrary, the ones a measurement reversed, and the limits that are known
+rather than discovered. It also explains the test shape — answer keys written
+before the code, mutations aimed at every gate, and why a surviving mutation
+has three possible causes.
+
 ## Credit
 
 `NOTICE` is the full list, and it is not only a licence formality: the
