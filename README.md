@@ -102,12 +102,21 @@ included.
     bash tools/sweep_all.sh                            # every harness, resumable
     python3 tests/condition_coverage.py                # compound conditions
 
-Two notes for a fresh clone, both measured on one. The semantic gates need
-`npm install` first: without it `embed` refuses, and five modules fail on that
-refusal rather than on a defect. And `tests/test_no_real_paths.py` is the
-publication gate — its last check asserts that the deliberately excluded
-working record still exists *locally*, which is false in a clone by design. Run
-that one in the working copy, not in a checkout.
+Two notes for a fresh clone, both measured on one — most recently by cloning
+this repository from GitHub and running the suite in it.
+
+The semantic gates need `npm install` first: without it `embed` refuses, and
+every module that reaches the vectors fails on that refusal rather than on a
+defect. Today that is `cp9`, `cp10`, `cp12`, `cp14` and `cp22`, and the list
+grows whenever a checkpoint touches the semantic half — which is why it is a
+list here and not a count. The failures name themselves: `--fused` and
+`--semantic` refuse with a reason, and a gate that reports `answered=False` is
+reporting the refusal, not a wrong answer.
+
+And `tests/test_no_real_paths.py` is the publication gate — its last check
+asserts that the deliberately excluded working record still exists *locally*,
+which is false in a clone by design. Run that one in the working copy, not in a
+checkout.
 
 The gates are written before the code they grade, and each one has mutations
 aimed at it: a green gate that no mutation can turn red is decoration. The full
