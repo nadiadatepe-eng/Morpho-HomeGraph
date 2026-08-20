@@ -62,6 +62,9 @@
 - `python3 tests/mutate.py` — full sweep, also revises stale needles
 - `python3 tests/mutate_cp<n>.py` — one checkpoint's harness
 - `python3 tests/condition_coverage.py` — compound conditions nothing aims at
+- `python3 tests/mutation_coverage.py` — checks nothing aims a mutation at
+- `python3 tests/gate_coverage.py` — requirements an answer key names that no check
+  reports; runs every module, so it is a tool you invoke rather than a suite gate
 - `python3 tests/mutate_no_real_paths.py` — the CP-PUB path gate
 
 ## Child DOX Index

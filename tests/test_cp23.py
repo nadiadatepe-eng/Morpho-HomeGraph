@@ -345,10 +345,98 @@ def gates_command(work):
                         listed.returncode))
 
 
+# -- 11: the measurement that decides whether this checkpoint is worth it ---
+
+def gates_measurement():
+    """R7's number exists, was produced by a tool, and is written down.
+
+    **This gate was missing from the first version of this file**, found by
+    auditing the gold answer against the gate numbers the run actually prints
+    -- not by grepping for `check(`, because cp22 builds its names in a loop
+    and a source scan reports zero for a module that gates ten. Every other
+    checkpoint in the repository reported every gate its answer key names;
+    CP-23 reported eleven of twelve. A requirement met in fact and unenforced
+    is exactly the silent omission the house rules forbid, and it is worse
+    here than elsewhere: gate 11 is the one that can say *this checkpoint was
+    not worth building*.
+
+    What is checkable is the shape, not the value. The number itself moves
+    with the corpus -- that is the whole point of R7 -- so pinning `54.5` here
+    would be a gate against a home area that is allowed to change. What must
+    hold is that the measurement is **reproducible from a tool** rather than
+    asserted in prose, and that its answer reached the working record.
+
+    `TODO.md` is git-ignored by design (it names the account and home paths),
+    so in a fresh clone this degrades to SKIPPED rather than failing --
+    the same treatment `test_no_real_paths.py` gate 15 gives the same file.
+    A skip is not a pass, and it says which half it could not check.
+    """
+    tool = os.path.join(REPO, "tools", "m8_dir_mixture.py")
+    check("11a the R7 measurement is a tool that can be re-run, not a claim",
+          os.path.isfile(tool), tool)
+
+    # **The first version of this gate asserted the tool's header**, which is
+    # printed even when there is no project to measure -- so "mixed" appeared
+    # in stdout for a tool that had measured nothing, and both needles aimed
+    # at gate 11 SURVIVED. A gate that passes on a header is a gate that
+    # cannot say "this checkpoint was not worth building", which is the one
+    # thing gate 11 exists to be able to say.
+    #
+    # So the tool is run against a store built here, and the assertion is on
+    # the *answer*: a project row, and a mixture percentage. The fixture is
+    # deliberately mixed -- one unreadable file and one that is merely absent
+    # from the vectors -- so a real measurement has something to find.
+    with tempfile.TemporaryDirectory(prefix="mhg-cp23-m8-") as work:
+        home = corpus(os.path.join(work, "home"))
+        with open(os.path.join(home, "sub", "picture.bin"), "wb") as fh:
+            fh.write(b"\x89PNG\x00\x00binary\x00bytes")
+        cli(work, "scan", work)
+        added = cli(work, "add", home)
+        measured_id = added.stdout.split()[0] if added.stdout.strip() else ""
+        cli(work, "update", measured_id)
+        env = dict(os.environ,
+                   MORPHO_HOMEGRAPH_HOME=os.path.join(work, "store"))
+        ran = subprocess.run([sys.executable, tool], capture_output=True,
+                             text=True, cwd=REPO, env=env, timeout=300)
+
+    percent = re.search(r"mixed ([\d.,]+) %", ran.stdout)
+    check("11b the measurement runs and answers the mixture question",
+          ran.returncode == 0 and measured_id and measured_id in ran.stdout
+          and percent is not None,
+          "exit %s, %r" % (ran.returncode, ran.stdout.strip().splitlines()))
+
+    # 11b-control: a header alone must not satisfy 11b. Run the same tool
+    # against an empty store -- it exits 0 and prints the header, and the
+    # percentage line is absent. Without this, the survivors come back.
+    with tempfile.TemporaryDirectory(prefix="mhg-cp23-m8e-") as empty:
+        bare = subprocess.run(
+            [sys.executable, tool], capture_output=True, text=True, cwd=REPO,
+            env=dict(os.environ, MORPHO_HOMEGRAPH_HOME=empty), timeout=300)
+    check("11b CONTROL: a header with no project is not a measurement",
+          "mixed" in bare.stdout
+          and re.search(r"mixed ([\d.,]+) %", bare.stdout) is None,
+          "%r" % bare.stdout.strip().splitlines())
+
+    record = os.path.join(REPO, "TODO.md")
+    if not os.path.isfile(record):
+        # Not a pass. A clone cannot see the working record, and saying so
+        # is the honest answer -- silently counting it green would make this
+        # gate report coverage it does not have.
+        print("SKIP  11c the measured number is written down"
+              "                  no TODO.md here (git-ignored by design)")
+        return
+    body = open(record, encoding="utf-8").read()
+    check("11c the measured number is written down, with its tool named",
+          "m8_dir_mixture" in body and "blandet" in body,
+          "tool named %s, mixture recorded %s"
+          % ("m8_dir_mixture" in body, "blandet" in body))
+
+
 def main() -> int:
     gates_direct()
     gates_pending()
     gates_shape()
+    gates_measurement()
     with tempfile.TemporaryDirectory(prefix="mhg-cp23-") as work:
         gates_command(work)
 

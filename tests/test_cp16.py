@@ -82,6 +82,35 @@ def gates_tool():
 
 # -- the attribution (gates 4-6) ------------------------------------------
 
+# The second tool borrowed from the same predecessor, carried over 2026-08-20.
+# It gets the same treatment as `condition_coverage.py` rather than a sentence
+# of credit, because the local contract says a borrowed file's hash is
+# re-hashed by a gate. Named 4b/5b: the answer key numbers requirements, and
+# splitting one across two files is refinement rather than a new gate.
+MUTCOV = os.path.join(ROOT, "tests", "mutation_coverage.py")
+MUTCOV_SOURCE = os.path.expanduser("~/homegraph/tests/mutation_coverage.py")
+
+
+def gates_second_borrow():
+    if not os.path.isfile(MUTCOV):
+        return
+    text = open(MUTCOV, encoding="utf-8").read()
+    found = re.findall(r"\b[0-9a-f]{64}\b", text)
+    check("4b the second borrowed tool declares a sha256 for its source",
+          len(found) == 1, (found[0][:16] + "...") if found else "none")
+    if not os.path.isfile(MUTCOV_SOURCE):
+        # SKIPPED, never PASS -- an attribution nobody can falsify is exactly
+        # what gate 5 refuses for the first borrow.
+        check("5b the second tool's declared sha256 matches its source", False,
+              "SKIPPED: %s absent -- unverifiable here" % MUTCOV_SOURCE)
+        return
+    real = hashlib.sha256(open(MUTCOV_SOURCE, "rb").read()).hexdigest()
+    check("5b the second tool's declared sha256 matches its source",
+          bool(found) and real == found[0],
+          "declared %s / actual %s"
+          % ((found[0][:12] if found else "none"), real[:12]))
+
+
 def gates_attribution():
     text = open(TOOL, encoding="utf-8").read()
     found = re.findall(r"\b[0-9a-f]{64}\b", text)
@@ -294,6 +323,7 @@ def gates_needles():
 def main() -> int:
     gates_tool()
     gates_attribution()
+    gates_second_borrow()
     with tempfile.TemporaryDirectory(prefix="mhg-cp16-") as work:
         gates_reporting(os.path.join(work, "repo"))
     with tempfile.TemporaryDirectory(prefix="mhg-cp16b-") as work:

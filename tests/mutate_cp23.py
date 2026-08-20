@@ -175,6 +175,33 @@ MUTATIONS = [
      '        if args.all or row["not_fresh"] or row["pending"]:',
      '        if args.all or row["not_fresh"]:  # mutated: pending dropped',
      "6g a fresh directory behind only by an unread file is pending"),
+
+    # -- gate 11, the one that can say "do not build this" ------------------
+    #
+    # Added after an audit found gate 11 had no check at all: the answer key
+    # named twelve gates and the run reported eleven. The measurement HAD been
+    # taken, so nothing was wrong with the result -- it was simply unenforced,
+    # which is the silent omission that reads as coverage. These needles exist
+    # so the enforcement cannot rot back to that state.
+    ("the measurement tool is gone, leaving R7 as a claim in prose",
+     "tools/m8_dir_mixture.py",
+     "def measure(project_id: str) -> dict:",
+     "def _renamed_away(project_id: str) -> dict:  # mutated: tool broken",
+     "11b the measurement runs and answers the mixture question"),
+
+    # The control catches this one rather than 11b, and that attribution is
+    # correct: dropping the word from the header means even the empty-store
+    # run stops saying "mixed", which is what the control asserts. Recorded
+    # as the control's kill instead of forced onto 11b -- a needle whose
+    # `expected` is wrong teaches the reader to distrust the attribution.
+    ("the tool stops reporting mixture and reports only totals",
+     "tools/m8_dir_mixture.py",
+     '    print("%-20s %7s %7s %7s %9s  %s"\n'
+     '          % ("project", "files", "dirs", "mixed", "not-fresh", "states"))',
+     '    print("%-20s %7s %7s %7s %9s  %s"\n'
+     '          % ("project", "files", "dirs", "-", "not-fresh", "states"))'
+     '  # mutated: mixture unreported',
+     "11b CONTROL: a header with no project is not a measurement"),
 ]
 
 
