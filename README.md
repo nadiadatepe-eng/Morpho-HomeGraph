@@ -97,7 +97,7 @@ included.
 
 ## Running the checks
 
-    uvx --with numpy --with pytest pytest tests/ -q    # 24 modules of gates
+    uvx --with numpy --with pytest pytest tests/ -q    # every gate module
     python3 tests/mutate_cp<n>.py                      # one checkpoint's needles
     bash tools/sweep_all.sh                            # every harness, resumable
     python3 tests/condition_coverage.py                # compound conditions
