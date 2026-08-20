@@ -11,6 +11,9 @@
 - `morpho_homegraph/` owns the implementation and the `morphofiles-graph` command.
 - `tests/` owns the gates, the gold answers in `tests/gold/`, and the mutation harnesses.
 - `tools/` owns the measurement scripts (M-1 … M-6, equivalence, eval).
+- `reports/` owns harvest notes: ideas read out of external projects, each with what was
+  taken, what was deliberately left, and the licence of the source. Candidates, not
+  decisions — a report never promotes itself into a checkpoint.
 - `docs/` owns the archify JSON sources; the rendered HTML lives outside the repo, in the
   owner's local documents directory.
 - `view/` and `NOTICE` carry morpho's Apache-2.0 obligation.
@@ -62,4 +65,5 @@
 - `tests/` — gates, gold answers, mutation harnesses.
 - `tools/` — measurement scripts.
 - `docs/` — archify diagram sources.
+- `reports/` — harvest notes from external projects.
 - `contrib/` — the systemd unit.
