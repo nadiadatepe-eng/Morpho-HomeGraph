@@ -46,6 +46,19 @@ MUTATIONS = [
      '    "node_modules/b4a": {',
      "2  the tree has not grown or shrunk unnoticed"),
 
+    # -- identity, which a count cannot give -------------------------------
+    #
+    # Found by an independent recheck, not by writing this file: swapping one
+    # package for a typosquat kept the total at 80 and the licence permissive,
+    # and **all seven gates stayed green**. A count answers "did the tree
+    # grow", never "is it the same tree" -- and the supply-chain change that
+    # matters most is precisely the one that keeps the total steady.
+    ("a package is swapped for a typosquat, leaving the count unchanged",
+     "package-lock.json",
+     '    "node_modules/is-arrayish": {',
+     '    "node_modules/evil-typosquat": {',
+     "2b every package is one we have already seen, by name"),
+
     # -- reproducibility goes away ----------------------------------------
     #
     # A `resolved` URL with no hash: `npm ci` fetches it and cannot tell if

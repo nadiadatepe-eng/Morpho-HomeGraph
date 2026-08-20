@@ -41,6 +41,35 @@ results, check = reporter(58)
 DECLARED = {"@xenova/transformers": "^2.17.2"}
 ENTRIES = 80
 
+# **The names, not only the count.** An independent recheck swapped one
+# package for `evil-typosquat` -- same 80 entries, same licence, same
+# integrity shape -- and all seven gates stayed green. A count answers "did
+# the tree grow", never "is it the same tree", and a supply-chain change that
+# matters most is precisely the one that keeps the total steady.
+#
+# Written out rather than derived, for the reason gate 2 already gives: an
+# expectation computed from the file it checks cannot fail.
+PACKAGES = frozenset("""
+    @huggingface/jinja @protobufjs/aspromise @protobufjs/base64
+    @protobufjs/codegen @protobufjs/eventemitter @protobufjs/fetch
+    @protobufjs/float @protobufjs/inquire @protobufjs/path
+    @protobufjs/pool @protobufjs/utf8 @types/long @types/node
+    @xenova/transformers b4a bare-events bare-fs bare-path bare-stream
+    bare-url base64-js bl buffer chownr color color-convert color-name
+    color-string decompress-response deep-extend detect-libc end-of-stream
+    events-universal expand-template fast-fifo flatbuffers fs-constants
+    github-from-package guid-typescript ieee754 inherits ini is-arrayish
+    long mimic-response minimist mkdirp-classic napi-build-utils node-abi
+    node-addon-api once onnx-proto onnxruntime-common onnxruntime-node
+    onnxruntime-web platform prebuild-install
+    prebuild-install/node_modules/tar-fs
+    prebuild-install/node_modules/tar-stream protobufjs pump rc
+    readable-stream safe-buffer semver sharp simple-concat simple-get
+    simple-swizzle streamx string_decoder strip-json-comments tar-fs
+    tar-stream teex text-decoder tunnel-agent undici-types util-deprecate
+    wrappy
+""".split())
+
 # The two packages that may run code during `npm install`. `sharp` also
 # downloads a prebuilt libvips from a URL that is not in the lockfile -- it is
 # sha512-verified against hashes in sharp's own package.json, but it is the
@@ -77,6 +106,12 @@ def main() -> int:
     check("2  the tree has not grown or shrunk unnoticed",
           len(packages) == ENTRIES,
           "%d entries, expected %d" % (len(packages), ENTRIES))
+
+    # 2b: identity, which the count cannot give. A swap keeps the total.
+    present = {key[len("node_modules/"):] for key in packages}
+    drift = sorted(present ^ PACKAGES)
+    check("2b every package is one we have already seen, by name",
+          not drift, "%s" % drift[:4])
 
     # Reproducibility. Without this `npm ci` is a fetch, not an install: an
     # entry with a `resolved` URL and no hash can come back different.
