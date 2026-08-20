@@ -12,6 +12,7 @@ runs on one machine, stores everything in SQLite, and has no network side.
     morphofiles-graph search "<words>"      # lexical, or --semantic / --fused
     morphofiles-graph view <id>             # a standalone graph page
     morphofiles-graph status [<id>]         # what each layer holds, and its age
+    morphofiles-graph stale <id>            # which directories are behind, and why
 
 ## The layers
 
@@ -25,7 +26,11 @@ runs on one machine, stores everything in SQLite, and has no network side.
 | **L5** view | morpho's force-layout engine, unchanged, rendering L3 |
 
 `status` reports the age and coverage of each layer, because an index that has
-been half-built must not look finished.
+been half-built must not look finished. `stale` asks the same question one
+level down: it groups those states **by directory, counting direct children**,
+so the answer is *where* rather than *how many*. It never rolls a subtree up —
+a count over a whole home area says "798 258 files, a bit of everything", which
+is true and useless.
 
 ## How the layers fit together
 
@@ -107,11 +112,13 @@ this repository from GitHub and running the suite in it.
 
 The semantic gates need `npm install` first: without it `embed` refuses, and
 every module that reaches the vectors fails on that refusal rather than on a
-defect. Today that is `cp9`, `cp10`, `cp12`, `cp14` and `cp22`, and the list
-grows whenever a checkpoint touches the semantic half — which is why it is a
-list here and not a count. The failures name themselves: `--fused` and
-`--semantic` refuse with a reason, and a gate that reports `answered=False` is
-reporting the refusal, not a wrong answer.
+defect. Today that is `cp9`, `cp10`, `cp12`, `cp14`, `cp22` and `cp23`, and the
+list grows whenever a checkpoint touches the semantic half — which is why it is
+a list here and not a count. The failures name themselves: `--fused` and
+`--semantic` refuse with a reason, a gate that reports `answered=False` is
+reporting the refusal, and the freshness gates print `2 unembedded` and
+`vectors never built` rather than a bare red. That last pair is the design
+working: an unembedded project and a broken one must not read the same.
 
 And `tests/test_no_real_paths.py` is the publication gate — its last check
 asserts that the deliberately excluded working record still exists *locally*,

@@ -48,6 +48,24 @@ caller is a rule the next caller forgets. Measured over 6.8 days of real use
 database server": one concurrent transaction every 81 hours is the entire prize
 a server process would buy.
 
+**One npm dependency, and the tree behind it is gated on its shape rather than
+on advisories.** `numpy` is the only Python dependency and `@xenova/transformers`
+the only declared JavaScript one, but that single line brings 80 locked packages
+and 252 MB. Audited 2026-08-20: `npm ci` is reproducible (no entry lacks an
+integrity hash), nothing is copyleft, and two packages may run code at install
+time. The gate checks *that* shape — a new dependency, a new licence or a new
+install script must be a decision — and deliberately does not run `npm audit`,
+because an answer that changes with the network turns red on a day nobody
+touched the repository, and a gate that fires for reasons outside the change is
+a gate people learn to ignore.
+
+The distinction the audit turned on is between a dependency being *present* and
+being *loaded*. Five advisories stand against this tree, one of them critical,
+and the critical one never executes: it arrives under a backend that is
+imported and never asked to do anything. That was measured by loading the model
+the way the worker does and reading the module cache — 13 of 68 packages — not
+inferred from the dependency graph, which would have said the opposite.
+
 **History is snapshots, not versioned edges.** Versioned-edge machinery was
 designed and then deleted from the design. Snapshots answer the same questions
 with one mechanism instead of three.
@@ -144,6 +162,18 @@ on the first real comparison.
 resolve produces no edge: asserting one would be a claim about a node we do not
 have.
 
+**Freshness is relative to the catalogue, never to the disk, and per directory
+that is inherited whole.** A file changed since the last `scan` is reported
+fresh, which is why every answer carries the catalogue's own age beside the
+verdict. Grouping those states by directory adds no new observation and cannot
+be fresher than what it groups.
+
+**A directory is a path prefix here, not an object.** The content layer holds
+files, so "the directory" is the `dirname` of a row. An empty directory on disk
+therefore does not exist for us at all, and a directory we have read nothing in
+is absent from the count rather than present with zeroes — printing `0 fresh`
+for something never read is an empty layer that looks finished.
+
 **There is exactly one writer per row, so two sources cannot yet disagree.**
 `backfill` only fills a hash where none exists, the `hash_source` migration only
 labels rows that already had one, and `resolve_candidate` keeps the old hash and
@@ -153,9 +183,9 @@ the first thing a second writer would take away. A change that lets a fact be
 derived from something moving underneath it, or compares a rebuilt store against
 an existing one, reintroduces the problem and needs an answer before it lands.
 
-## Where the next four checkpoints come from
+## Where the last five checkpoints come from
 
-CP-19 to CP-22 were specified on 2026-08-20 from ideas read out of three external
+CP-19 to CP-23 were specified on 2026-08-20 from ideas read out of three external
 projects. Nothing was cloned, installed or added as a dependency; the notes live
 in `reports/harvest-2026-08-20.md` with the licence of each source and an explicit
 list of what was deliberately left behind.
@@ -231,7 +261,31 @@ applicable rather than deferred.
 **Three of the four checkpoints drawn from the harvest did not survive contact
 with the code, and all three failed before any of it was written.** CP-19's
 premise was false, CP-21's was void, and CP-20's headline number was off by an
-order of magnitude when measured. Only CP-22 was built. That ratio is the
-argument for testing a premise before writing a specification, not against
-borrowing ideas: the borrowing cost three measurements and bought one gate plus
-three implementations that were never built.
+order of magnitude when measured. That ratio is the argument for testing a
+premise before writing a specification, not against borrowing ideas: the
+borrowing cost three measurements and bought two gates plus three
+implementations that were never built.
+
+**One point survived CP-20's rejection, and it was measured on its own before
+it was built.** Rejecting a checkpoint wholesale is as unexamined as accepting
+one: CP-20 was three mechanisms in a coat, and only the sampling and the upward
+refresh died on the numbers. Freshness *counting direct children* was left
+written down as not-taken, and CP-23 took it — after asking the question that
+would have killed it too. The measurement is not "does grouping work", since
+grouping always works, but **are directories mixed**: do a directory's direct
+children hold more than one state, so that a per-directory view says something
+the per-file view did not. Measured 2026-08-20: **54.5 %** of this project's
+directories are mixed, against the **2.4 %** of directories where CP-20's
+sampling threshold would ever have fired. Sampling addressed a rarity; mixture
+is the common case. Same source, same day, opposite verdicts, and the
+difference is a number rather than a preference.
+
+CP-23 aggregates nothing upward, which is deliberate: that is the mechanism
+CP-20 was rejected for, and it carries the source project's own unsolved write
+amplification with it. What it produced instead was a distinction the code did
+not previously have. "Behind" turned out to be two facts, not one: a file we
+hold and have not re-read is `stale`, and a file the catalogue can see and we
+have **never** read is *pending* — invisible to every count CP-12 makes,
+because those iterate the rows the content layer has. The first attempt
+conflated them and reported a freshly built project as maximally behind; a
+number that peaks precisely when nothing is wrong is worse than no number.
