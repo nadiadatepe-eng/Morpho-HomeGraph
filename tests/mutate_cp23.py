@@ -202,7 +202,146 @@ MUTATIONS = [
      '          % ("project", "files", "dirs", "-", "not-fresh", "states"))'
      '  # mutated: mixture unreported',
      "11b CONTROL: a header with no project is not a measurement"),
+
+    # -- checks the coverage map showed nothing aimed at --------------------
+    #
+    # Added 2026-08-20 after `mutation_coverage.py` was ported and put CP-23
+    # at 48 %, below the repository median, on this checkpoint's own new code.
+    # The list below is that map's UNCOVERED entries, minus the ones a needle
+    # cannot reach honestly (see the waivers at the end of this file).
+
+    # Gate 1 and gate 3 both watch the grouping key. The subtree mutation
+    # above lands on gate 2; this one drops the grouping entirely, so every
+    # file lands in one bucket and the per-directory view stops existing.
+    ("every file is grouped under one key, so directories vanish",
+     "morpho_homegraph/dirfresh.py",
+     "        grouped.setdefault(os.path.dirname(path), Counter())[value] += 1",
+     "        grouped.setdefault('', Counter())[value] += 1"
+     "  # mutated: one bucket",
+     "1  a file two levels down is counted in its own directory"),
+
+    # Gate 3 is the "one source, two views" gate: the per-directory sums must
+    # equal what CP-12 says for the same files. Miscounting by one preserves
+    # the shape and breaks the identity.
+    ("a state is counted twice, so the sums stop matching CP-12",
+     "morpho_homegraph/dirfresh.py",
+     "        states = {name: counted.get(name, 0) for name in\n"
+     "                  (freshness.FRESH, freshness.STALE, freshness.UNREAD,\n"
+     "                   freshness.UNEMBEDDED)}",
+     "        states = {name: counted.get(name, 0) * 2 for name in\n"
+     "                  (freshness.FRESH, freshness.STALE, freshness.UNREAD,\n"
+     "                   freshness.UNEMBEDDED)}  # mutated: double-counted",
+     "3  the per-directory states sum to the per-file tally"),
+
+    # Gate 6 names *which* L1 states are pending. The earlier needle widens
+    # PENDING; this one narrows it, because a set that is too small fails in
+    # the opposite direction and gate 7 cannot see it.
+    ("only `added` counts as pending, so real changes are missed",
+     "morpho_homegraph/dirfresh.py",
+     "PENDING = (journal.ADDED, journal.CHANGED, journal.TOUCHED,\n"
+     "           journal.UNCONFIRMED)",
+     "PENDING = (journal.ADDED,)  # mutated: the other three go silent",
+     "6  pending counts the four L1 states that are actually pending"),
+
+    # Gate 6i's mechanism: the `kind = 'file'` join. The earlier needle drops
+    # the whole join clause; this one keeps the join and flips the kind, which
+    # is the subtler way to get the same wrong answer.
+    ("the kind filter selects directories instead of files",
+     "morpho_homegraph/dirfresh.py",
+     "\"WHERE j.state IN (%s) AND f.kind = 'file'\" % marks,",
+     "\"WHERE j.state IN (%s) AND f.kind = 'dir'\" % marks,"
+     "  # mutated: exactly backwards",
+     "6i CONTROL: a directory in the journal is not a pending file"),
+
+    # Gates 6c and 6d: degrade rather than raise. A reader that throws on a
+    # catalogue built before the journal existed takes the whole answer down.
+    ("a catalogue with no journal raises instead of degrading",
+     "morpho_homegraph/dirfresh.py",
+     "    except Exception:                                    # noqa: BLE001",
+     "    except ZeroDivisionError:  # mutated: no longer catches the real error",
+     "6c a catalogue with no journal answers nothing, and does not raise"),
+
+    # Gate 6d: no catalogue at all. The needle returns a wrong *value* rather
+    # than raising -- the first version returned `l0_store.db` on a `None`,
+    # which is an AttributeError, and the harness correctly reported CRASH
+    # instead of a kill. **A crash is not a gate saying no**, and a needle
+    # that produces one tests the harness rather than the gate.
+    ("no catalogue at all answers with a phantom count instead of nothing",
+     "morpho_homegraph/dirfresh.py",
+     "    if l0_store is None:\n        return {}",
+     "    if l0_store is None:\n"
+     "        return {'phantom': 1}  # mutated: invents a pending directory",
+     "6d no catalogue at all answers nothing"),
+
+    # Gate 8: absence. A directory we have read nothing in must not be
+    # present with zeroes -- the empty layer that looks finished.
+    ("directories with no rows are invented and filled with zeroes",
+     "morpho_homegraph/dirfresh.py",
+     "    grouped: dict[str, Counter[str]] = {}\n"
+     "    for path, value in state.items():",
+     "    grouped: dict[str, Counter[str]] = {'invented': Counter()}\n"
+     "    for path, value in state.items():  # mutated: a phantom directory",
+     "8  a directory with no rows is absent, not present with zeroes"),
+
+    # Gate 9b: the tie-break is what makes two runs agree. Sorting on an
+    # unstable key reorders equal rows between runs.
+    ("the tie-break is dropped, so equal rows can reorder between runs",
+     "morpho_homegraph/dirfresh.py",
+     "                  key=lambda item: (-item[1][\"not_fresh\"],\n"
+     "                                    -item[1][\"pending\"], item[0]))",
+     "                  key=lambda item: (-item[1][\"not_fresh\"],\n"
+     "                                    -item[1][\"pending\"],"
+     " -len(item[0])))  # mutated: length, not path",
+     "9  worst first, and equal rows fall in path order"),
+
+    # Gate 4b: the count beside the state. "1 stale" is the actionable half;
+    # a bare state name tells the reader nothing about how much.
+    ("the line names the state but drops the number",
+     "morpho_homegraph/dirfresh.py",
+     "            parts.append(\"%d %s\" % (row[\"states\"][name], name))",
+     "            parts.append(\"%s\" % name)  # mutated: no count",
+     "4b the changed directory says stale, and says how many"),
+
+    # Gate 11a: the tool must be reachable by the name the answer key gives.
+    ("the measurement tool is looked for under the wrong name",
+     "tests/test_cp23.py",
+     '    tool = os.path.join(REPO, "tools", "m8_dir_mixture.py")',
+     '    tool = os.path.join(REPO, "tools", "m8_gone.py")  # mutated',
+     "11a the R7 measurement is a tool that can be re-run, not a claim"),
+
 ]
+
+# Deliberately unmutated, with the reason, rather than left looking forgotten.
+# `mutation_coverage.py` will keep reporting these as UNCOVERED, which is the
+# honest output: the map is a map, not a score.
+#
+#   `0  the project builds before anything is asked` -- a guard that reports
+#       setup failure and returns early. Any mutation that trips it also
+#       trips whichever gate the fixture was built for, so a needle here
+#       would only ever produce a misattribution.
+#   `12 CONTROL: an ordinary run exits 0` -- every mutation in this file that
+#       breaks a command already turns it red as a side effect; aiming one at
+#       it deliberately would pin an implementation detail rather than test
+#       the property.
+#   `6e`/`6f` -- both are already the assertion the `known`-subtraction needle
+#       above kills through gate 5 and gate 6h. A third needle at the same
+#       line would be a second copy of an existing kill.
+WAIVED = (
+    "0  the project builds before anything is asked",
+    "12 CONTROL: an ordinary run exits 0",
+    "6e CONTROL: pending still fires for a file L2 has never read",
+    "6f CONTROL: nothing is pending when L2 already holds it all",
+    # `11d the number names the tool that produced it` -- the needle for this
+    # SURVIVED twice and was withdrawn rather than kept as decoration. It
+    # asserts a fact about `TODO.md`, which is git-ignored by design, so the
+    # harness's copied tree has no such file and gate 11d SKIPs there: no
+    # mutation of the source can turn a skipped gate red. Mutating the check
+    # itself only ever weakens it, which makes the suite greener, not redder.
+    # The gate is real where it runs -- it is the split of a conjunction that
+    # let an unattributed number pass -- but it is unmutatable by construction
+    # in this harness, and saying so is better than a needle that lies.
+    "11d the number names the tool that produced it, so it is re-runnable",
+)
 
 
 if __name__ == "__main__":

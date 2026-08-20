@@ -426,10 +426,17 @@ def gates_measurement():
               "                  no TODO.md here (git-ignored by design)")
         return
     body = open(record, encoding="utf-8").read()
-    check("11c the measured number is written down, with its tool named",
-          "m8_dir_mixture" in body and "blandet" in body,
-          "tool named %s, mixture recorded %s"
-          % ("m8_dir_mixture" in body, "blandet" in body))
+    # Two checks, not one conjunction. A needle that removed the tool-name
+    # half SURVIVED against `A and B`, because the mixture half alone kept it
+    # green -- the same masking that let a disjunct hide in gate 6g. An
+    # unattributed number and a missing number are different failures and get
+    # different gates.
+    check("11c the measured number is written down",
+          re.search(r"\d+[.,]\d+ %", body) is not None and "blandet" in body,
+          "mixture recorded %s" % ("blandet" in body))
+    check("11d the number names the tool that produced it, so it is re-runnable",
+          "m8_dir_mixture" in body,
+          "tool named %s" % ("m8_dir_mixture" in body))
 
 
 def main() -> int:
