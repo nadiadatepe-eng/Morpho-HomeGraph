@@ -143,3 +143,51 @@ on the first real comparison.
 **The graph draws links, it does not infer them.** An inline link that does not
 resolve produces no edge: asserting one would be a claim about a node we do not
 have.
+
+**Two sources that disagree are resolved by whoever wrote last.** `hash_source`
+solves one instance by hand — `compared` and `backfilled` are never merged,
+because they are not the same kind of claim — but there is no general place to
+record a disagreement. In `journal.py::resolve_candidate` a re-read candidate
+writes its digest straight in, and nothing says the two passes ever differed.
+Named here rather than left to be discovered.
+
+## Where the next four checkpoints come from
+
+CP-19 to CP-22 were specified on 2026-08-20 from ideas read out of three external
+projects. Nothing was cloned, installed or added as a dependency; the notes live
+in `reports/harvest-2026-08-20.md` with the licence of each source and an explicit
+list of what was deliberately left behind.
+
+**Conflict detection belongs before deduplication, not after** (semantica, MIT).
+Their pipeline runs `extract → conflict detection → deduplication`. The ordering
+is the whole idea: deduplication merges what is *the same*, so it must not run
+until something has caught what *claims* to be the same while disagreeing. That
+is the general form of the limit named directly above, and it is CP-19.
+
+**A summary should describe a directory, not a file** (OpenViking, Apache-2.0).
+Summaries generated per directory, with file summaries as inputs aggregated
+upward, make the index proportional to the tree rather than to the file count.
+On this home area that is the difference between roughly 450 000 summaries and a
+few thousand. Two details are load-bearing and are the reason the idea was worth
+reading twice: sampling must be deterministic, so that re-summarising an unchanged
+tree produces no diff at all, and freshness must count direct children so a
+summary that lags can say so instead of looking current. Their own documentation
+records an unsolved problem with refreshing parents on every child change, which
+is written into CP-20 so it is not inherited by accident.
+
+**"The index is derived" is a description until a gate can falsify it** (ai-memory,
+MIT). Their split — hand-editable markdown as the source of truth, the database as
+a rebuildable index — is the split this project already claims. It has never been
+tested. CP-22 throws the store away, rebuilds from the corpus and compares answers
+rather than rows, with a negative control that must go red. Independently, that
+project arrived at a single writer with a read-only pool, which is locked decision
+12 here reached from the other direction; two projects landing in the same place is
+weak evidence the decision was right, and no evidence at all that the
+implementation is.
+
+**A retrieval change is measured before it is adopted.** CP-21 would filter on short
+summaries first and load full content only for survivors, to cut token cost. CP-9E
+already exists and is the judge. If any of its numbers get worse the cascade does
+not become the default — the same verdict semantic search received. The mechanism
+their documentation leads with is disabled by its own default value, which is a
+reason to measure rather than to copy.
