@@ -66,6 +66,18 @@ imported and never asked to do anything. That was measured by loading the model
 the way the worker does and reading the module cache — 13 of 68 packages — not
 inferred from the dependency graph, which would have said the opposite.
 
+The same distinction decided what to *do*. Exactly one advisory was on the
+execution path, `sharp`: 17 MB of image processing, plus the only install-time
+network fetch the lockfile does not describe, in a repository that embeds text
+only. It was replaced with a local stub that **throws** — a silent no-op would
+turn "someone added image input" into a wrong answer instead of an error — and
+the 384-dimension vectors came back **bit-identical**, worst elementwise
+difference 0.0 across four inputs including the empty string, which takes a
+different path through the tokenizer. The tree went from 68 directories and
+252 MB to 15 and 229 MB. The removal was justified by what loads, not by what
+the advisory count says, and it was verified against a hash captured before the
+change rather than by re-reading the new tree and finding it self-consistent.
+
 **History is snapshots, not versioned edges.** Versioned-edge machinery was
 designed and then deleted from the design. Snapshots answer the same questions
 with one mechanism instead of three.

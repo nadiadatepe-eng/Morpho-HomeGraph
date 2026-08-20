@@ -42,6 +42,11 @@
   `package-lock.json`, not against `npm audit` — an answer that changes with the network
   makes a gate people learn to ignore. A new dependency, a new licence or a new install
   script must be a decision.
+- A **linked local override** (`link: true`) is exempt from the integrity, install-script
+  and licence gates **by name**, never by widening an allowlist: it is a different kind of
+  thing from a fetched package, and a rule broad enough to excuse it would also excuse a
+  real unhashed dependency. Its licence lives on the source entry, which is gated normally.
+  Re-baselining the entry count or name set requires the reason in the commit message.
 - A stored hash carries `hash_source`: `compared` came from a real comparison between two
   passes, `backfilled` from reading the file with no comparison behind it. The two are never
   merged, and `content_hash` and `hash_source` are null together or not at all.
@@ -75,4 +80,9 @@
 - `docs/` — archify diagram sources.
 - `reports/` — harvest notes from external projects, and audits of our own dependency
   surface (`npm-audit-2026-08-20.md`).
-- `contrib/` — the systemd unit.
+- `contrib/` — the systemd unit, and `contrib/sharp-stub/`, the local `sharp` override adopted
+  2026-08-20. The stub **throws**: this repository embeds text only, so image input
+  reaching that path is an error, not a no-op. The override's `file:` spec must stay
+  three levels up (`file:../../../contrib/sharp-stub`) — npm resolves it relative to the
+  dependent, and the shorter spellings leave a **broken symlink that installs `rc=0`**.
+  An absolute path also resolves but would name a real home path, which CP-PUB forbids.

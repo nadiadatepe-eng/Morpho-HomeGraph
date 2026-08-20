@@ -39,7 +39,31 @@ results, check = reporter(58)
 
 # Measured 2026-08-20 and written here, not counted from the lockfile.
 DECLARED = {"@xenova/transformers": "^2.17.2"}
-ENTRIES = 80
+
+# Re-baselined 2026-08-20 when the `sharp` override was adopted: 80 -> 27.
+# The reason is in the commit message, as this ratchet requires. `sharp` was
+# 17 MB of image processing on the execution path of a repository that embeds
+# text only, the one advisory in the tree that actually loads (four libvips
+# CVEs), and the only install-time network fetch the lockfile does not
+# describe. Replacing it with `contrib/sharp-stub` leaves the 384-dim vectors
+# **bit-identical** -- worst elementwise difference 0.0 across four inputs,
+# sha256 07105d3c...4daf0c3 unchanged -- and takes the tree 252 MB -> 229 MB.
+# See `reports/npm-audit-2026-08-20.md`.
+#
+# 26 = 25 installed packages + `contrib/sharp-stub`, which is a **local source
+# directory**, not something fetched. (The root entry is filtered out below, as
+# it always was.) That distinction is what gates 3, 4, 5 and 6 below now have
+# to make.
+ENTRIES = 26
+
+# The linked local override. It is exempted **by name** in the gates below,
+# never by widening an allowlist: a `link: true` entry is a different kind of
+# thing from a fetched package (no registry, no integrity, no licence field on
+# the link itself), and a rule broad enough to excuse it would also excuse a
+# real unhashed dependency arriving from the network.
+LINK = "node_modules/sharp"
+LINK_SOURCE = "contrib/sharp-stub"
+OVERRIDES = {"sharp": "file:../../../contrib/sharp-stub"}
 
 # **The names, not only the count.** An independent recheck swapped one
 # package for `evil-typosquat` -- same 80 entries, same licence, same
@@ -54,27 +78,15 @@ PACKAGES = frozenset("""
     @protobufjs/codegen @protobufjs/eventemitter @protobufjs/fetch
     @protobufjs/float @protobufjs/inquire @protobufjs/path
     @protobufjs/pool @protobufjs/utf8 @types/long @types/node
-    @xenova/transformers b4a bare-events bare-fs bare-path bare-stream
-    bare-url base64-js bl buffer chownr color color-convert color-name
-    color-string decompress-response deep-extend detect-libc end-of-stream
-    events-universal expand-template fast-fifo flatbuffers fs-constants
-    github-from-package guid-typescript ieee754 inherits ini is-arrayish
-    long mimic-response minimist mkdirp-classic napi-build-utils node-abi
-    node-addon-api once onnx-proto onnxruntime-common onnxruntime-node
-    onnxruntime-web platform prebuild-install
-    prebuild-install/node_modules/tar-fs
-    prebuild-install/node_modules/tar-stream protobufjs pump rc
-    readable-stream safe-buffer semver sharp simple-concat simple-get
-    simple-swizzle streamx string_decoder strip-json-comments tar-fs
-    tar-stream teex text-decoder tunnel-agent undici-types util-deprecate
-    wrappy
+    @xenova/transformers flatbuffers guid-typescript long onnx-proto
+    onnxruntime-common onnxruntime-node onnxruntime-web platform
+    protobufjs sharp undici-types
 """.split())
 
-# The two packages that may run code during `npm install`. `sharp` also
-# downloads a prebuilt libvips from a URL that is not in the lockfile -- it is
-# sha512-verified against hashes in sharp's own package.json, but it is the
-# one fetch `npm ci` does not describe, so it is named here.
-INSTALL_SCRIPTS = {"node_modules/sharp", "node_modules/protobufjs"}
+# The packages that may run code during `npm install`. `sharp` used to be here
+# too, and the libvips download it did -- the one fetch `npm ci` did not
+# describe -- is precisely why it is now a link instead.
+INSTALL_SCRIPTS = {"node_modules/protobufjs"}
 
 # Permissive only. This repository already carries one attribution obligation
 # (morpho, Apache-2.0, in NOTICE); a second arriving through npm should be a
@@ -108,15 +120,59 @@ def main() -> int:
           "%d entries, expected %d" % (len(packages), ENTRIES))
 
     # 2b: identity, which the count cannot give. A swap keeps the total.
-    present = {key[len("node_modules/"):] for key in packages}
+    #
+    # `contrib/sharp-stub` is keyed by its **path**, not by `node_modules/…`,
+    # so it is named separately rather than run through the prefix strip --
+    # which would otherwise reduce it to the nonsense token `-stub` and make
+    # this gate red for a reason that has nothing to do with drift.
+    present = {key[len("node_modules/"):] for key in packages
+               if key.startswith("node_modules/")}
     drift = sorted(present ^ PACKAGES)
     check("2b every package is one we have already seen, by name",
           not drift, "%s" % drift[:4])
 
+    # 2b-source: and the only entry that is NOT under node_modules/ is the
+    # override's source. Without this, a second local path could be added to
+    # the lockfile and 2b would never look at it.
+    outside = sorted(key for key in packages
+                     if not key.startswith("node_modules/"))
+    check("2b-src the only non-node_modules entry is the override's source",
+          outside == [LINK_SOURCE], "%s" % outside)
+
+    # 2c: the override is declared, and spelled the one way that works. Three
+    # other `file:` spellings were tried and all three left a **broken**
+    # symlink that npm reported as a clean rc=0 install; the failure surfaced
+    # only later, as ERR_MODULE_NOT_FOUND when the model loaded. npm resolves
+    # a `file:` override relative to the *dependent*, not the project root.
+    # An absolute path also resolves, but would name a real home directory in
+    # a published file, which CP-PUB forbids -- so the spelling is load-bearing
+    # twice over and is gated rather than remembered.
+    check("2c the sharp override is declared, and spelled the way that resolves",
+          manifest.get("overrides") == OVERRIDES,
+          "%s" % manifest.get("overrides"))
+
+    # 2d: and the link actually points at something. A green `npm install`
+    # proves nothing here; only the filesystem does. Skipped rather than
+    # failed when node_modules is absent, because this file is also read in
+    # trees that were never installed -- and a skip says so out loud.
+    installed = os.path.join(REPO, "node_modules", "sharp")
+    if os.path.lexists(installed):
+        target = os.readlink(installed) if os.path.islink(installed) else "(not a link)"
+        check("2d the linked override resolves on disk, not just in the lockfile",
+              os.path.exists(installed),
+              "node_modules/sharp -> %s" % target)
+    else:
+        check("2d the linked override resolves on disk, not just in the lockfile",
+              True, "SKIPPED: node_modules absent, nothing installed to check")
+
     # Reproducibility. Without this `npm ci` is a fetch, not an install: an
     # entry with a `resolved` URL and no hash can come back different.
+    # The link is exempt by name: it has a `resolved` (a local path) and no
+    # integrity, because there is nothing fetched to hash. Everything else
+    # still has to be hashed, including any future link that is not this one.
     unhashed = sorted(key for key, value in packages.items()
-                      if value.get("resolved") and not value.get("integrity"))
+                      if value.get("resolved") and not value.get("integrity")
+                      and not (key == LINK and value.get("link")))
     check("3  every fetched package is integrity-hashed, so npm ci repeats",
           unhashed == [], "%s" % unhashed[:4])
 
@@ -126,7 +182,13 @@ def main() -> int:
           scripted == INSTALL_SCRIPTS,
           "%s" % sorted(scripted ^ INSTALL_SCRIPTS))
 
-    unknown = sorted({value.get("license", "?") for value in packages.values()}
+    # The link entry carries no licence field -- there is no package metadata
+    # on a symlink. Its licence lives on the source entry `contrib/sharp-stub`
+    # (Apache-2.0), which is in `packages` and is checked like anything else,
+    # so exempting the link loses no coverage.
+    unknown = sorted({value.get("license", "?")
+                      for key, value in packages.items()
+                      if not (key == LINK and value.get("link"))}
                      - ALLOWED)
     check("5  no licence arrives that we have not already accepted",
           unknown == [], "%s" % unknown)
@@ -135,10 +197,17 @@ def main() -> int:
     # from an empty tree matches nothing and passes everything. This is the
     # denominator, and CP-7B R8 is the reason it is here: an empty layer must
     # not be able to look finished.
+    #
+    # The denominator moved with the tree (80 -> 27) and needs the same care as
+    # the numerator: exactly one entry, the link, is legitimately unlicensed,
+    # so the bar is "all but one", written as such rather than loosened to a
+    # smaller number that a second unlicensed package could also clear.
     licensed = [value for value in packages.values() if value.get("license")]
+    links = [value for value in packages.values() if value.get("link")]
     check("6  CONTROL: the lockfile is not empty and does carry licences",
-          len(packages) > 50 and len(licensed) > 50,
-          "%d packages, %d licensed" % (len(packages), len(licensed)))
+          len(packages) > 20 and len(licensed) == len(packages) - len(links),
+          "%d packages, %d licensed, %d link(s)"
+          % (len(packages), len(licensed), len(links)))
 
     # 7: lockfileVersion 3 is what `packages` above assumes. Version 1 has no
     # `packages` key at all, and every gate here would then read `{}` and pass.
