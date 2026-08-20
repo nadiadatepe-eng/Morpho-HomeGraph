@@ -399,11 +399,24 @@ def gates_measurement():
         ran = subprocess.run([sys.executable, tool], capture_output=True,
                              text=True, cwd=REPO, env=env, timeout=300)
 
+    # **The percentage must be non-zero, and that is not pedantry.** An
+    # independent recheck from a clean clone sabotaged the tool (`mixed = 0`)
+    # and this gate stayed green, because it asked whether a percentage was
+    # printed rather than whether mixture was computed. `0.0 %` is a perfectly
+    # well-formed answer to the wrong question.
+    #
+    # The fixture makes the demand fair: `sub/` holds one unreadable binary
+    # (`unread`) and one text file that is merely unembedded, so at least one
+    # directory is mixed by construction. A tool that cannot find mixture here
+    # cannot find it anywhere, and R7's whole purpose is a number that could
+    # have come back low and did not.
     percent = re.search(r"mixed ([\d.,]+) %", ran.stdout)
+    value = float(percent.group(1).replace(",", ".")) if percent else 0.0
     check("11b the measurement runs and answers the mixture question",
           ran.returncode == 0 and measured_id and measured_id in ran.stdout
-          and percent is not None,
-          "exit %s, %r" % (ran.returncode, ran.stdout.strip().splitlines()))
+          and percent is not None and value > 0.0,
+          "exit %s, mixture %s, %r"
+          % (ran.returncode, value, ran.stdout.strip().splitlines()))
 
     # 11b-control: a header alone must not satisfy 11b. Run the same tool
     # against an empty store -- it exits 0 and prints the header, and the

@@ -183,6 +183,16 @@ MUTATIONS = [
     # taken, so nothing was wrong with the result -- it was simply unenforced,
     # which is the silent omission that reads as coverage. These needles exist
     # so the enforcement cannot rot back to that state.
+    # Found by an independent recheck that sabotaged the tool in a clean
+    # clone and watched gate 11b stay green: it asked whether a percentage was
+    # printed, not whether mixture was computed. `0.0 %` answered the wrong
+    # question perfectly. This needle is that sabotage, kept.
+    ("the mixture count is hardcoded to zero, so the tool measures nothing",
+     "tools/m8_dir_mixture.py",
+     "    mixed = sum(1 for c in per_dir.values() if len(c) > 1)",
+     "    mixed = 0  # mutated: mixture never found",
+     "11b the measurement runs and answers the mixture question"),
+
     ("the measurement tool is gone, leaving R7 as a claim in prose",
      "tools/m8_dir_mixture.py",
      "def measure(project_id: str) -> dict:",
