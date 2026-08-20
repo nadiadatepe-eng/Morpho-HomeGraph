@@ -215,9 +215,23 @@ project arrived at a single writer with a read-only pool, which is locked decisi
 weak evidence the decision was right, and no evidence at all that the
 implementation is.
 
-**A retrieval change is measured before it is adopted.** CP-21 would filter on short
-summaries first and load full content only for survivors, to cut token cost. CP-9E
-already exists and is the judge. If any of its numbers get worse the cascade does
-not become the default — the same verdict semantic search received. The mechanism
-their documentation leads with is disabled by its own default value, which is a
-reason to measure rather than to copy.
+**A retrieval change is measured before it is adopted, and this one died at the
+first measurement.** CP-21 would have filtered on short summaries and loaded full
+content only for survivors, to cut token cost. Step one of its own specification
+was to measure what an answer costs today. It costs almost nothing: `search`
+returns paths and nothing else — `SELECT rowid, path, bm25(...)`, one line per
+hit, 313 characters for a four-hit answer. There is no content in the response to
+cascade away.
+
+The idea solves a problem the borrowed-from system has and this one does not,
+because *metadata over everything, content where you point* (locked decision 7)
+already makes retrieval a cascade whose last step is the reader. Closed as not
+applicable rather than deferred.
+
+**Three of the four checkpoints drawn from the harvest did not survive contact
+with the code, and all three failed before any of it was written.** CP-19's
+premise was false, CP-21's was void, and CP-20's headline number was off by an
+order of magnitude when measured. Only CP-22 was built. That ratio is the
+argument for testing a premise before writing a specification, not against
+borrowing ideas: the borrowing cost three measurements and bought one gate plus
+three implementations that were never built.
