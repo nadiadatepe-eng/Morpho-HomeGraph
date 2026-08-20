@@ -78,6 +78,19 @@ MUTATIONS = [
      '    codes.append(cli(inc_home, "embed", project_id(inc_home)).returncode)',
      '    pass  # mutated: stale vector coverage on one side',
      "2 fused answers identical after a rebuild, and present"),
+
+    # -- the embedding whitelist ------------------------------------------
+    #
+    # Folds the path into the embedding input. That is exactly what
+    # OpenViking's whitelist exists to prevent: a metadata field entering
+    # the vector means two stores at different paths embed different text,
+    # and a rebuild changes retrieval input.
+    ("the path is folded into the embedding input alongside the content",
+     "morpho_homegraph/embed.py",
+     '            "SELECT DISTINCT sha256, text FROM content "',
+     '            "SELECT DISTINCT sha256, path || text FROM content "'
+     '  # mutated: metadata in the vector',
+     "9 the embedding input is content only, on both paths"),
 ]
 
 

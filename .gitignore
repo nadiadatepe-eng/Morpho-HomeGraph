@@ -9,3 +9,8 @@ node_modules/
 # paths on every decision line. See CP-PUB / FASIT-cppub.md.
 TODO.md
 tests/gold/FASIT-*.md
+# Snapshots of exactly those two, taken by tools/backup_untracked.py. They
+# hold the same real paths, so they are excluded for the same reason -- and
+# a backup that leaked what the original is kept out for would be worse than
+# no backup at all.
+.todo-backups/

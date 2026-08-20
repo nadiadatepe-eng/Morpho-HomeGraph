@@ -334,6 +334,30 @@ def gates(work):
                 "answer in gate 2. NOT compared: the vector values "
                 "themselves, only the ranking they produce"
                 % (inc_vec, fresh_vec)))
+
+    # Gate 9: the embedding input is the content and nothing else.
+    #
+    # Taken from OpenViking (harvest 2026-08-20 §2a), which keeps an explicit
+    # whitelist of what may enter an embedding and applies **the same policy
+    # on reindex**, so that rebuilding the index cannot change retrieval
+    # input. Here the property already holds by construction -- `embed`
+    # selects `sha256, text` and chunks the text alone -- so this gate is
+    # not new behaviour, it is the invariant written down where a future
+    # change would trip over it.
+    #
+    # It belongs in CP-22 rather than in a checkpoint of its own because it
+    # is the same question one layer down: CP-22 asks whether the answers
+    # survive a rebuild, and this asks whether the *input* to the answers
+    # does. A metadata field folded into the embedding text would break
+    # both, and this gate names which one.
+    same_count = inc_vec == fresh_vec
+    src = open(os.path.join(REPO, "morpho_homegraph", "embed.py")).read()
+    text_only = "SELECT DISTINCT sha256, text FROM content " in src
+    out.append(("9 the embedding input is content only, on both paths",
+                same_count and text_only,
+                "%d vs %d vectors; embed reads `sha256, text` and chunks the "
+                "text alone -- no path, no mtime, no metadata. A rebuild "
+                "therefore cannot change retrieval input" % (inc_vec, fresh_vec)))
     return out
 
 
