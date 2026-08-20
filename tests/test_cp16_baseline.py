@@ -67,7 +67,26 @@ TOOL = os.path.join(ROOT, "tests", "condition_coverage.py")
 # `_last_match` folded back into `_hits`). Two of the five are waived at the
 # line with a reason -- a display fallback, and a `or {}` whose removal raises
 # before any gate can speak.
-BASELINE_TOTAL, BASELINE_MISSED = 111, 64
+#
+# 2026-08-20, CP-23 and the npm surface: 111 / 64 -> 114 / 64. Three new
+# compound conditions, **none of them unaimed**, and the missed count did not
+# move at all. Two things produced that, and both are the prescribed answers
+# rather than accounting:
+#
+#   * `condition_coverage.py` named the three-way listing filter
+#     (`args.all or not_fresh or pending`) the moment it was written, and
+#     three needles were written for its three disjuncts -- a two-axis
+#     fixture lets a dropped disjunct pass.
+#   * A fourth condition, `dirfresh.per_dir`'s `pending = pending or {}`, was
+#     **deleted rather than waived**. Every real caller passes a mapping, so
+#     no fixture can make the halves differ and a needle would have killed by
+#     raising rather than by a gate saying no. An immutable default replaced
+#     it. That is CP-16's own answer for a branch nothing can observe.
+#
+# **Which line was unaimed was measured, not assumed.** The first version of
+# this note named a gate in `test_npm_surface.py`; a diff of the detector's
+# output before and after the change said otherwise.
+BASELINE_TOTAL, BASELINE_MISSED = 114, 64
 
 
 def main() -> int:

@@ -16,8 +16,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import (backfill, embed, freshness, fusion, search, service, snapshot,
-               view)
+from . import (backfill, dirfresh, embed, freshness, fusion, search, service,
+               snapshot, view)
 from .lock import Locked, StoreLock
 from .scan import scan
 from .store import (L0, Store, data_home, db_path, initialise, l0_path,
@@ -205,6 +205,58 @@ def cmd_status(args: argparse.Namespace) -> int:
             if cover["hashed"] < cover["in_scope"]:
                 print("%-14s %d cold row(s): morphofiles-graph backfill"
                       % ("", cover["in_scope"] - cover["hashed"]))
+    return 0
+
+
+def cmd_stale(args: argparse.Namespace) -> int:
+    """CP-23: which directories are behind, counting direct children.
+
+    A reader of `status` learns that 11 of 99 files are stale; a reader of
+    this learns *where*. The states and the clocks are CP-12's, from CP-12's
+    functions -- this command groups, it does not decide (FASIT-cp23 R2/R3).
+
+    The catalogue is opened read-only alongside the project store for two
+    separate reasons, and they fail separately: without it no file can be
+    called `stale`, because the comparison that decides it is the one we did
+    not make, and without it there is no journal to count pending changes
+    from. Both degrade to a named absence rather than to a wrong number.
+    """
+    store_db = db_path(_resolve(args.project))
+    if not store_db.is_file():
+        raise SystemExit("%s has no index yet: morphofiles-graph update %s"
+                         % (args.project, args.project))
+    with Store(store_db, read_only=True) as store:
+        root = store.get_meta("project_path")
+        l0 = None
+        if l0_path().is_file():
+            l0 = Store(l0_path(), read_only=True, role=L0)
+        try:
+            state = freshness.per_file(store, l0)
+            ages = freshness.ages(store, l0)
+            # The scope, so a change outside this project is not counted as
+            # pending *for this project* (FASIT-cp23 blind spot 3), and the
+            # paths L2 already holds, so "pending" means the catalogue knows
+            # about a file we have not read rather than "the journal moved".
+            pending = dirfresh.pending_by_dir(
+                l0, service.chosen_scope(root).contains if root else None,
+                known=state)
+        finally:
+            if l0 is not None:
+                l0.close()
+    rows = dirfresh.per_dir(state, pending)
+    shown = 0
+    for directory, row in dirfresh.ranked(rows):
+        if args.all or row["not_fresh"] or row["pending"]:
+            print(dirfresh.describe(directory, row, root))
+            shown += 1
+    if not shown:
+        # Said in words, not by an empty answer. "Nothing printed" is the
+        # signal CP-12 gate 5 exists to stop the reader having to interpret.
+        print("every directory is fresh: %d files in %d directories"
+              % (len(state), len(rows)))
+    # R3: the same three clocks every other answer carries, and they are
+    # printed whether or not anything is behind.
+    print(freshness.describe(ages))
     return 0
 
 
@@ -726,6 +778,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_status = sub.add_parser("status", help="what a project's index holds")
     p_status.add_argument("project", nargs="?", help="project id or path")
     p_status.set_defaults(func=cmd_status)
+
+    # CP-23. `--all` because the default answers the question a reader has --
+    # what is behind -- and a full listing is the rarer one.
+    p_stale = sub.add_parser(
+        "stale", help="which directories are behind, by direct children")
+    p_stale.add_argument("project", help="project id or path")
+    p_stale.add_argument("--all", action="store_true",
+                         help="list fresh directories too")
+    p_stale.set_defaults(func=cmd_stale)
 
     p_update = sub.add_parser("update", help="write to a project's index")
     p_update.add_argument("project", help="project id or path")

@@ -11,9 +11,10 @@
 - `morpho_homegraph/` owns the implementation and the `morphofiles-graph` command.
 - `tests/` owns the gates, the gold answers in `tests/gold/`, and the mutation harnesses.
 - `tools/` owns the measurement scripts (M-1 … M-6, equivalence, eval).
-- `reports/` owns harvest notes: ideas read out of external projects, each with what was
-  taken, what was deliberately left, and the licence of the source. Candidates, not
-  decisions — a report never promotes itself into a checkpoint.
+- `reports/` owns harvest notes (ideas read out of external projects, each with what was
+  taken, what was deliberately left, and the licence of the source) and audits of our own
+  dependency surface. Candidates and findings, not decisions — a report never promotes
+  itself into a checkpoint.
 - `docs/` owns the archify JSON sources; the rendered HTML lives outside the repo, in the
   owner's local documents directory.
 - `view/` and `NOTICE` carry morpho's Apache-2.0 obligation.
@@ -37,6 +38,10 @@
   a layer, and revise mutation needles rather than trusting them.
 - Needles written with escaped quotes are invisible to the condition detector. Use single
   quotes.
+- The npm surface is gated by `tests/test_npm_surface.py` against the shape of
+  `package-lock.json`, not against `npm audit` — an answer that changes with the network
+  makes a gate people learn to ignore. A new dependency, a new licence or a new install
+  script must be a decision.
 - A stored hash carries `hash_source`: `compared` came from a real comparison between two
   passes, `backfilled` from reading the file with no comparison behind it. The two are never
   merged, and `content_hash` and `hash_source` are null together or not at all.
@@ -53,7 +58,7 @@
 
 ## Verification
 
-- `uvx --with numpy --with pytest pytest tests/ -q` → 22 modules, 459 gates
+- `uvx --with numpy --with pytest pytest tests/ -q` → 27 modules
 - `python3 tests/mutate.py` — full sweep, also revises stale needles
 - `python3 tests/mutate_cp<n>.py` — one checkpoint's harness
 - `python3 tests/condition_coverage.py` — compound conditions nothing aims at
@@ -65,5 +70,6 @@
 - `tests/` — gates, gold answers, mutation harnesses.
 - `tools/` — measurement scripts.
 - `docs/` — archify diagram sources.
-- `reports/` — harvest notes from external projects.
+- `reports/` — harvest notes from external projects, and audits of our own dependency
+  surface (`npm-audit-2026-08-20.md`).
 - `contrib/` — the systemd unit.
