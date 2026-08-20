@@ -17,15 +17,69 @@ twice on independent trees (`reports/npm-audit-2026-08-20.md`):
   two trees, two stubs. `protobufjs` never loads either way.
 - Tree goes **68 -> 15 directories, 252 MB -> 229 MB**.
 
-## Steps
+## Steps — DRY-RUN 2026-08-20, so these are measured, not predicted
 
-1. `contrib/sharp-stub/package.json` -> `{"name":"sharp","version":"0.32.6","main":"index.js","license":"Apache-2.0"}`
-2. `contrib/sharp-stub/index.js` -> a function that **throws**. Not a no-op:
-   a silent `undefined` turns "someone added image input" into a wrong answer
-   instead of an error. Message should name why it is stubbed.
-3. `package.json`: add `"overrides": {"sharp": "file:contrib/sharp-stub"}`
-4. `rm -rf node_modules package-lock.json && npm install` (regenerates the lock)
-5. Re-measure the vector against the pre-override values before trusting it.
+The first version of this plan was written from memory and **was wrong in a way
+that would have cost the next session an hour**. It was dry-run in a throwaway
+clone; what follows is what actually happened.
+
+1. `contrib/sharp-stub/package.json` ->
+   `{"name":"sharp","version":"0.32.6","main":"index.js","license":"Apache-2.0"}`
+2. `contrib/sharp-stub/index.js` -> a function that **throws**. Not a no-op: a
+   silent `undefined` turns "someone added image input" into a wrong answer
+   instead of an error.
+3. **The override needs an ABSOLUTE path.** This is the trap:
+
+       "overrides": { "sharp": "file:/absolute/path/to/contrib/sharp-stub" }
+
+   Three other spellings were tried and **all three leave a broken symlink**
+   that npm reports as a clean `rc=0` install:
+
+   | spelling | result |
+   |---|---|
+   | `file:contrib/sharp-stub` | `sharp -> @xenova/transformers/contrib/sharp-stub` — **broken** |
+   | `file:../../contrib/sharp-stub` | `sharp -> contrib/sharp-stub` — **broken** |
+   | `file:contrib/...` + `workspaces` | install fails, rc=1 |
+   | **absolute** `file:/…/contrib/sharp-stub` | `sharp -> ../contrib/sharp-stub` — **resolves** |
+
+   npm resolves a `file:` override relative to the **dependent**, not the
+   project root. The failure is silent until the model loads, and then it is
+   `ERR_MODULE_NOT_FOUND: Cannot find package 'sharp' imported from
+   .../@xenova/transformers/src/utils/image.js`. **Always `test -e
+   node_modules/sharp` after installing** — a green `npm install` proves nothing.
+
+   The absolute path does **not** leak into the lockfile: it is stored as
+   `"resolved": "contrib/sharp-stub", "link": true`. Check `package.json`
+   before committing, though, since that keeps the literal string.
+4. `rm -rf node_modules package-lock.json && npm install`
+5. Compare against the baseline hash below. **In the dry run it MATCHED**, so
+   the override is behaviour-preserving; that is a result to reproduce, not to
+   assume.
+
+## What the gates actually do — six red, not two
+
+The earlier draft said "gates 2 and 2b will go red". **Measured: six of eight
+go red, and four needles rot.** Do not treat this as breakage; it is the
+ratchet, and every line of it needs a decision:
+
+    FAIL 2   26 entries, expected 80        <- re-baseline ENTRIES
+    FAIL 2b  name set changed               <- re-baseline PACKAGES
+    FAIL 3   node_modules/sharp has no integrity hash
+    FAIL 4   node_modules/sharp "has an install script"
+    FAIL 5   licence '?' (a link entry carries none)
+    FAIL 6   CONTROL: 26 packages, 25 licensed
+
+Gates 3, 4, 5 and 6 fire because a `link: true` entry is a **different kind of
+thing** from a fetched package: no integrity, no licence, no registry. The
+honest fix is to teach those four gates that a linked local override is exempt
+**by name**, and to say so at the line — not to widen the allowlists, which
+would also excuse a real unhashed dependency. Gate 6's denominator needs the
+same care: `25 licensed` is correct once one entry is a link.
+
+Rotted needles (`mutate_npm_surface.py`), all four reporting `needle missing`:
+`is-arrayish` swap, the sha512 string, `tar-fs` version, the `engines` block.
+Re-point them at strings the new lock actually contains. **Do not delete them**
+— the typosquat needle in particular is the one that caught a real hole.
 
 ## The baseline is already captured — compare, do not re-derive
 
