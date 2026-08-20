@@ -190,7 +190,26 @@ rebuildable index — is the split this project already claims, and CP-14 alread
 compares an updated index against one built from nothing across nine axes. What
 that does not cover is ranking: two stores can hold the same rows and still answer
 differently, because search fuses and orders. CP-22 is the narrow extension that
-runs the same queries against both, with a negative control that must go red. Independently, that
+runs the same queries against both, with a negative control that must go red.
+
+**Built and measured 2026-08-20: the answers do survive a rebuild.** Nine gates,
+five mutations each killed by the gate that names them. The property holds, but
+it holds *by construction* -- `search.build` deletes and reinserts, so an
+updated store is a rebuilt store. That was predicted in writing before the code,
+which is the only reason the green result means anything.
+
+What the checkpoint actually caught was three gates of its own that could not
+go red: two comparing a pair of refusals rather than a pair of answers, and one
+control comparing a hand-swapped list against itself. The second of those sat
+one line from the first and survived the first being fixed, found only because
+an unrelated mutation made search refuse. **Fixing one instance of a blind spot
+is not fixing the blind spot.**
+
+One real divergence was measured and is correct behaviour rather than a defect:
+a store with five of six files embedded ranks the sixth fourth instead of
+second. `update` does not fill the vectors -- `embed` is a separate command by
+design -- so comparing a half-embedded store against a fully embedded one asks
+an unfair question. Independently, that
 project arrived at a single writer with a read-only pool, which is locked decision
 12 here reached from the other direction; two projects landing in the same place is
 weak evidence the decision was right, and no evidence at all that the
