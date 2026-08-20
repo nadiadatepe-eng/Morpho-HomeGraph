@@ -1,11 +1,11 @@
-# NEXT: apply the sharp override (Nadi approved 2026-08-20)
+# NEXT: apply the sharp override (approved by the owner 2026-08-20)
 
 State at handoff: `main` = `f89f8d1`, clean, level with origin. Suite 27 passed,
 npm gate 8/8, dox-gates exit 0.
 
 ## The decision
 
-Nadi approved adopting the `sharp` override. Evidence it rests on, measured
+The owner approved adopting the `sharp` override. Evidence it rests on, measured
 twice on independent trees (`reports/npm-audit-2026-08-20.md`):
 
 - `sharp` is 17 MB of image processing on the **execution path** and this
@@ -72,7 +72,7 @@ are the ratchet, so:
 
 Then update `reports/npm-audit-2026-08-20.md` (it currently says the override
 is an open thread), `TODO.md`, and `~/AGENTS.md` (its Morpho entry calls the
-override "an open thread for Nadi"). Push.
+override an open thread for the owner). Push.
 
 ## Also still open, unrelated
 
